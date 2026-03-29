@@ -18,6 +18,7 @@ func Reduce(events []Event) (*Issue, error) {
 		Assignees:   []ActorID{},
 		Comments:    []Comment{},
 		Attachments: []Attachment{},
+		Relations:   []Relation{},
 	}
 
 	for _, e := range events {
@@ -177,6 +178,25 @@ func ApplyEvent(issue *Issue, e Event) error {
 		}
 		issue.Attachments = removeAttachment(issue.Attachments, p.AttachmentID)
 		issue.UpdatedAt = maxTime(issue.UpdatedAt, e.Timestamp)
+
+	case EventIssueLinked:
+		var p RelationPayload
+		if err := json.Unmarshal(e.Payload, &p); err != nil {
+			return err
+		}
+		rel := Relation{Type: p.RelationType, TargetIssue: p.TargetIssue}
+		if !containsRelation(issue.Relations, rel) {
+			issue.Relations = append(issue.Relations, rel)
+		}
+		issue.UpdatedAt = maxTime(issue.UpdatedAt, e.Timestamp)
+
+	case EventIssueUnlinked:
+		var p RelationPayload
+		if err := json.Unmarshal(e.Payload, &p); err != nil {
+			return err
+		}
+		issue.Relations = removeRelation(issue.Relations, Relation{Type: p.RelationType, TargetIssue: p.TargetIssue})
+		issue.UpdatedAt = maxTime(issue.UpdatedAt, e.Timestamp)
 	}
 
 	return nil
@@ -240,6 +260,25 @@ func removeAttachment(s []Attachment, id AttachmentID) []Attachment {
 	result := make([]Attachment, 0, len(s))
 	for _, x := range s {
 		if x.ID != id {
+			result = append(result, x)
+		}
+	}
+	return result
+}
+
+func containsRelation(s []Relation, r Relation) bool {
+	for _, x := range s {
+		if x.Type == r.Type && x.TargetIssue == r.TargetIssue {
+			return true
+		}
+	}
+	return false
+}
+
+func removeRelation(s []Relation, r Relation) []Relation {
+	result := make([]Relation, 0, len(s))
+	for _, x := range s {
+		if !(x.Type == r.Type && x.TargetIssue == r.TargetIssue) {
 			result = append(result, x)
 		}
 	}

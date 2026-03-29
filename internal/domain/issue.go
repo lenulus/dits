@@ -18,8 +18,14 @@ type Issue struct {
 	ClosedAt    *time.Time
 	Comments    []Comment
 	Attachments []Attachment
+	Relations   []Relation
 	EventCount  int
 	HeadEvents  []EventID
+}
+
+type Relation struct {
+	Type        string      // "blocks", "relates_to", "duplicates", etc.
+	TargetIssue CanonicalID
 }
 
 type Comment struct {

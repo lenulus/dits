@@ -5,7 +5,11 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
 	"github.com/lenulus/pf/internal/blob"
 	"github.com/lenulus/pf/internal/domain"
@@ -56,9 +60,32 @@ func main() {
 	}
 
 	srv := server.New(db, blobs, logger)
+	httpSrv := &http.Server{
+		Addr:    *addr,
+		Handler: srv,
+	}
+
+	// Graceful shutdown on SIGINT/SIGTERM.
+	done := make(chan struct{})
+	go func() {
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+		sig := <-sigCh
+		logger.Info("shutting down", "signal", sig)
+
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := httpSrv.Shutdown(ctx); err != nil {
+			logger.Error("shutdown error", "error", err)
+		}
+		close(done)
+	}()
+
 	logger.Info("dits-server starting", "addr", *addr, "project", *projectKey)
-	if err := srv.ListenAndServe(*addr); err != nil {
+	if err := httpSrv.ListenAndServe(); err != http.ErrServerClosed {
 		logger.Error("server error", "error", err)
 		os.Exit(1)
 	}
+	<-done
+	logger.Info("server stopped")
 }

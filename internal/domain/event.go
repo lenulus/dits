@@ -23,6 +23,8 @@ const (
 	EventSharedIDAssigned    EventType = "issue.shared_id_assigned"
 	EventAttachmentAdded   EventType = "issue.attachment_added"
 	EventAttachmentRemoved EventType = "issue.attachment_removed"
+	EventIssueLinked       EventType = "issue.linked"
+	EventIssueUnlinked     EventType = "issue.unlinked"
 )
 
 type Event struct {
@@ -88,6 +90,11 @@ type AttachmentAddedPayload struct {
 
 type AttachmentRemovedPayload struct {
 	AttachmentID AttachmentID `json:"attachment_id"`
+}
+
+type RelationPayload struct {
+	RelationType string      `json:"relation_type"` // e.g. "blocks", "relates_to", "duplicates"
+	TargetIssue  CanonicalID `json:"target_issue"`
 }
 
 // MustMarshalPayload marshals a payload to JSON, panicking on error.
