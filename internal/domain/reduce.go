@@ -14,9 +14,10 @@ func Reduce(events []Event) (*Issue, error) {
 	}
 
 	issue := &Issue{
-		Labels:    []string{},
-		Assignees: []ActorID{},
-		Comments:  []Comment{},
+		Labels:      []string{},
+		Assignees:   []ActorID{},
+		Comments:    []Comment{},
+		Attachments: []Attachment{},
 	}
 
 	for _, e := range events {
@@ -150,6 +151,32 @@ func ApplyEvent(issue *Issue, e Event) error {
 		}
 		issue.SharedID = p.SharedID
 		issue.UpdatedAt = maxTime(issue.UpdatedAt, e.Timestamp)
+
+	case EventAttachmentAdded:
+		var p AttachmentAddedPayload
+		if err := json.Unmarshal(e.Payload, &p); err != nil {
+			return err
+		}
+		if !containsAttachment(issue.Attachments, p.AttachmentID) {
+			issue.Attachments = append(issue.Attachments, Attachment{
+				ID:          p.AttachmentID,
+				ContentHash: p.ContentHash,
+				Filename:    p.Filename,
+				MimeType:    p.MimeType,
+				SizeBytes:   p.SizeBytes,
+				AddedBy:     e.ActorID,
+				AddedAt:     e.Timestamp,
+			})
+		}
+		issue.UpdatedAt = maxTime(issue.UpdatedAt, e.Timestamp)
+
+	case EventAttachmentRemoved:
+		var p AttachmentRemovedPayload
+		if err := json.Unmarshal(e.Payload, &p); err != nil {
+			return err
+		}
+		issue.Attachments = removeAttachment(issue.Attachments, p.AttachmentID)
+		issue.UpdatedAt = maxTime(issue.UpdatedAt, e.Timestamp)
 	}
 
 	return nil
@@ -194,6 +221,25 @@ func removeActor(s []ActorID, v ActorID) []ActorID {
 	result := make([]ActorID, 0, len(s))
 	for _, x := range s {
 		if x != v {
+			result = append(result, x)
+		}
+	}
+	return result
+}
+
+func containsAttachment(s []Attachment, id AttachmentID) bool {
+	for _, x := range s {
+		if x.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+func removeAttachment(s []Attachment, id AttachmentID) []Attachment {
+	result := make([]Attachment, 0, len(s))
+	for _, x := range s {
+		if x.ID != id {
 			result = append(result, x)
 		}
 	}

@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 
+	"github.com/lenulus/pf/internal/blob"
 	"github.com/lenulus/pf/internal/domain"
 	"github.com/lenulus/pf/internal/server"
 	"github.com/lenulus/pf/internal/store/sqlite"
@@ -15,6 +16,7 @@ import (
 func main() {
 	addr := flag.String("addr", ":8484", "listen address")
 	dbPath := flag.String("db", "dits-server.db", "database path")
+	blobDir := flag.String("blobs", "./blobs", "blob storage directory")
 	projectKey := flag.String("project", "", "project key (required)")
 	flag.Parse()
 
@@ -47,7 +49,13 @@ func main() {
 		logger.Info("initialized meta config", "project", *projectKey)
 	}
 
-	srv := server.New(db, logger)
+	blobs, err := blob.NewFSStore(*blobDir)
+	if err != nil {
+		logger.Error("failed to create blob store", "error", err)
+		os.Exit(1)
+	}
+
+	srv := server.New(db, blobs, logger)
 	logger.Info("dits-server starting", "addr", *addr, "project", *projectKey)
 	if err := srv.ListenAndServe(*addr); err != nil {
 		logger.Error("server error", "error", err)

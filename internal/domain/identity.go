@@ -31,6 +31,10 @@ type MetaVersion uint64
 // NodeID identifies a DITS instance (client or server).
 type NodeID string
 
+// AttachmentID is a globally unique, client-generated attachment identifier.
+// Format: att_<ULID>
+type AttachmentID string
+
 var (
 	entropyMu sync.Mutex
 	entropy   = ulid.Monotonic(rand.Reader, 0)
@@ -65,8 +69,13 @@ func NewActorID(source io.Reader) ActorID {
 	return ActorID(fmt.Sprintf("actor_%s", id.String()))
 }
 
-func (id CanonicalID) String() string { return string(id) }
-func (id EventID) String() string     { return string(id) }
-func (id SharedID) String() string    { return string(id) }
-func (id ActorID) String() string     { return string(id) }
-func (id NodeID) String() string      { return string(id) }
+func NewAttachmentID() AttachmentID {
+	return AttachmentID(fmt.Sprintf("att_%s", newULID().String()))
+}
+
+func (id CanonicalID) String() string   { return string(id) }
+func (id EventID) String() string       { return string(id) }
+func (id SharedID) String() string      { return string(id) }
+func (id ActorID) String() string       { return string(id) }
+func (id NodeID) String() string        { return string(id) }
+func (id AttachmentID) String() string  { return string(id) }

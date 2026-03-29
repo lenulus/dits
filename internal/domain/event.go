@@ -20,7 +20,9 @@ const (
 	EventIssuePrioritySet  EventType = "issue.priority_set"
 	EventIssueClosed       EventType = "issue.closed"
 	EventIssueReopened     EventType = "issue.reopened"
-	EventSharedIDAssigned  EventType = "issue.shared_id_assigned"
+	EventSharedIDAssigned    EventType = "issue.shared_id_assigned"
+	EventAttachmentAdded   EventType = "issue.attachment_added"
+	EventAttachmentRemoved EventType = "issue.attachment_removed"
 )
 
 type Event struct {
@@ -74,6 +76,18 @@ type PrioritySetPayload struct {
 
 type SharedIDAssignedPayload struct {
 	SharedID SharedID `json:"shared_id"`
+}
+
+type AttachmentAddedPayload struct {
+	AttachmentID AttachmentID `json:"attachment_id"`
+	ContentHash  string       `json:"content_hash"`
+	Filename     string       `json:"filename"`
+	MimeType     string       `json:"mime_type"`
+	SizeBytes    int64        `json:"size_bytes"`
+}
+
+type AttachmentRemovedPayload struct {
+	AttachmentID AttachmentID `json:"attachment_id"`
 }
 
 // MustMarshalPayload marshals a payload to JSON, panicking on error.

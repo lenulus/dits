@@ -3,9 +3,13 @@ package cli
 import (
 	"context"
 	"fmt"
+	"mime"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/lenulus/pf/internal/blob"
 	"github.com/lenulus/pf/internal/domain"
 	"github.com/lenulus/pf/internal/project"
 	"github.com/lenulus/pf/internal/store"
@@ -170,6 +174,13 @@ var issueShowCmd = &cobra.Command{
 			fmt.Printf("\n%s\n", issue.Body)
 		}
 
+		if len(issue.Attachments) > 0 {
+			fmt.Printf("\n--- Attachments (%d) ---\n", len(issue.Attachments))
+			for _, a := range issue.Attachments {
+				fmt.Printf("  %s  %s  (%d bytes)  %s\n", a.ID, a.Filename, a.SizeBytes, a.ContentHash)
+			}
+		}
+
 		if len(issue.Comments) > 0 {
 			fmt.Printf("\n--- Comments (%d) ---\n", len(issue.Comments))
 			for _, c := range issue.Comments {
@@ -320,6 +331,178 @@ var issueReopenCmd = &cobra.Command{
 	},
 }
 
+var issueAttachCmd = &cobra.Command{
+	Use:   "attach <issue-id> <file-path>",
+	Short: "Attach a file to an issue",
+	Args:  cobra.ExactArgs(2),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		proj, err := loadProject()
+		if err != nil {
+			return err
+		}
+		defer proj.DB.Close()
+
+		ctx := context.Background()
+		issue, err := resolveIssue(ctx, proj, args[0])
+		if err != nil {
+			return err
+		}
+
+		filePath := args[1]
+		info, err := os.Stat(filePath)
+		if err != nil {
+			return fmt.Errorf("file not found: %w", err)
+		}
+		if info.Size() > blob.MaxBlobSize {
+			return fmt.Errorf("file too large: %d bytes (max %d)", info.Size(), blob.MaxBlobSize)
+		}
+
+		// Compute hash.
+		hash, size, err := blob.ComputeFileHash(filePath)
+		if err != nil {
+			return err
+		}
+
+		// Store blob locally.
+		f, err := os.Open(filePath)
+		if err != nil {
+			return err
+		}
+		defer f.Close()
+
+		if err := proj.Blobs.Put(ctx, hash, f); err != nil {
+			return fmt.Errorf("storing blob: %w", err)
+		}
+
+		// Determine mime type.
+		filename := filepath.Base(filePath)
+		mimeType := mime.TypeByExtension(filepath.Ext(filename))
+		if mimeType == "" {
+			mimeType = "application/octet-stream"
+		}
+
+		// Create event.
+		heads, err := proj.DB.GetHeads(ctx, issue.ID)
+		if err != nil {
+			return err
+		}
+
+		attID := domain.NewAttachmentID()
+		event := domain.Event{
+			ID:             domain.NewEventID(),
+			IssueID:        issue.ID,
+			Type:           domain.EventAttachmentAdded,
+			ParentEventIDs: heads,
+			ActorID:        proj.Config.ActorID,
+			Timestamp:      time.Now().UTC(),
+			Payload: domain.MustMarshalPayload(domain.AttachmentAddedPayload{
+				AttachmentID: attID,
+				ContentHash:  hash,
+				Filename:     filename,
+				MimeType:     mimeType,
+				SizeBytes:    size,
+			}),
+		}
+
+		if err := appendAndMaterialize(ctx, proj, issue.ID, event); err != nil {
+			return err
+		}
+
+		id := string(issue.SharedID)
+		if id == "" {
+			id = string(issue.ID)
+		}
+		fmt.Printf("Attached %s to %s (%s, %d bytes)\n", filename, id, attID, size)
+		return nil
+	},
+}
+
+var issueAttachmentsCmd = &cobra.Command{
+	Use:     "attachments <issue-id>",
+	Short:   "List attachments for an issue",
+	Args:    cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		proj, err := loadProject()
+		if err != nil {
+			return err
+		}
+		defer proj.DB.Close()
+
+		ctx := context.Background()
+		issue, err := resolveIssue(ctx, proj, args[0])
+		if err != nil {
+			return err
+		}
+
+		if len(issue.Attachments) == 0 {
+			fmt.Println("No attachments.")
+			return nil
+		}
+
+		for _, a := range issue.Attachments {
+			fmt.Printf("%-28s %-30s %8d  %s  %s\n", a.ID, a.Filename, a.SizeBytes, a.MimeType, a.ContentHash)
+		}
+		return nil
+	},
+}
+
+var issueDetachCmd = &cobra.Command{
+	Use:   "detach <issue-id> <attachment-id>",
+	Short: "Remove an attachment from an issue",
+	Args:  cobra.ExactArgs(2),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		proj, err := loadProject()
+		if err != nil {
+			return err
+		}
+		defer proj.DB.Close()
+
+		ctx := context.Background()
+		issue, err := resolveIssue(ctx, proj, args[0])
+		if err != nil {
+			return err
+		}
+
+		attID := domain.AttachmentID(args[1])
+		found := false
+		for _, a := range issue.Attachments {
+			if a.ID == attID {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return fmt.Errorf("attachment %s not found on this issue", attID)
+		}
+
+		heads, err := proj.DB.GetHeads(ctx, issue.ID)
+		if err != nil {
+			return err
+		}
+
+		event := domain.Event{
+			ID:             domain.NewEventID(),
+			IssueID:        issue.ID,
+			Type:           domain.EventAttachmentRemoved,
+			ParentEventIDs: heads,
+			ActorID:        proj.Config.ActorID,
+			Timestamp:      time.Now().UTC(),
+			Payload:        domain.MustMarshalPayload(domain.AttachmentRemovedPayload{AttachmentID: attID}),
+		}
+
+		if err := appendAndMaterialize(ctx, proj, issue.ID, event); err != nil {
+			return err
+		}
+
+		id := string(issue.SharedID)
+		if id == "" {
+			id = string(issue.ID)
+		}
+		fmt.Printf("Detached %s from %s\n", attID, id)
+		return nil
+	},
+}
+
 func init() {
 	issueCmd.AddCommand(issueCreateCmd)
 	issueCmd.AddCommand(issueListCmd)
@@ -327,6 +510,9 @@ func init() {
 	issueCmd.AddCommand(issueCommentCmd)
 	issueCmd.AddCommand(issueCloseCmd)
 	issueCmd.AddCommand(issueReopenCmd)
+	issueCmd.AddCommand(issueAttachCmd)
+	issueCmd.AddCommand(issueAttachmentsCmd)
+	issueCmd.AddCommand(issueDetachCmd)
 
 	issueCreateCmd.Flags().StringP("title", "t", "", "Issue title")
 	issueCreateCmd.Flags().StringP("body", "b", "", "Issue body")

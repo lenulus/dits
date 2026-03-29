@@ -42,7 +42,7 @@ func (s *Store) Close() error {
 }
 
 func (s *Store) migrate() error {
-	migrations := []string{"migrations/001_initial.sql", "migrations/002_sync_state.sql"}
+	migrations := []string{"migrations/001_initial.sql", "migrations/002_sync_state.sql", "migrations/003_attachments.sql"}
 	for _, m := range migrations {
 		data, err := migrationsFS.ReadFile(m)
 		if err != nil {
@@ -288,6 +288,20 @@ func (s *Store) UpsertIssue(ctx context.Context, issue *domain.Issue) error {
 		_, err := tx.ExecContext(ctx,
 			`INSERT INTO issue_comments (event_id, issue_id, actor_id, body, timestamp) VALUES (?, ?, ?, ?, ?)`,
 			c.EventID, issue.ID, c.ActorID, c.Body, c.Timestamp.UTC().Format(time.RFC3339Nano),
+		)
+		if err != nil {
+			return err
+		}
+	}
+
+	// Replace attachments.
+	_, _ = tx.ExecContext(ctx, `DELETE FROM issue_attachments WHERE issue_id = ?`, issue.ID)
+	for _, a := range issue.Attachments {
+		_, err := tx.ExecContext(ctx,
+			`INSERT INTO issue_attachments (attachment_id, issue_id, content_hash, filename, mime_type, size_bytes, added_by, added_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			a.ID, issue.ID, a.ContentHash, a.Filename, a.MimeType, a.SizeBytes,
+			a.AddedBy, a.AddedAt.UTC().Format(time.RFC3339Nano),
 		)
 		if err != nil {
 			return err
@@ -577,6 +591,25 @@ func (s *Store) loadIssueRelations(ctx context.Context, issue *domain.Issue) err
 		}
 		c.Timestamp, _ = time.Parse(time.RFC3339Nano, ts)
 		issue.Comments = append(issue.Comments, c)
+	}
+
+	// Attachments
+	rows4, err := s.db.QueryContext(ctx,
+		`SELECT attachment_id, content_hash, filename, mime_type, size_bytes, added_by, added_at
+		 FROM issue_attachments WHERE issue_id = ? ORDER BY added_at`, issue.ID)
+	if err != nil {
+		return err
+	}
+	defer rows4.Close()
+	issue.Attachments = []domain.Attachment{}
+	for rows4.Next() {
+		var a domain.Attachment
+		var ts string
+		if err := rows4.Scan(&a.ID, &a.ContentHash, &a.Filename, &a.MimeType, &a.SizeBytes, &a.AddedBy, &ts); err != nil {
+			return err
+		}
+		a.AddedAt, _ = time.Parse(time.RFC3339Nano, ts)
+		issue.Attachments = append(issue.Attachments, a)
 	}
 
 	return nil

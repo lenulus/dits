@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/lenulus/pf/internal/blob"
 	"github.com/lenulus/pf/internal/domain"
 	"github.com/lenulus/pf/internal/store"
 	"github.com/lenulus/pf/internal/store/sqlite"
@@ -32,9 +33,10 @@ func (p *Project) SaveConfig() error {
 }
 
 type Project struct {
-	Root   string
+	Root  string
 	Config Config
-	DB     store.DB
+	DB    store.DB
+	Blobs blob.Store
 }
 
 // Init creates a new DITS project in the given directory.
@@ -70,7 +72,13 @@ func Init(root, projectKey string) (*Project, error) {
 		return nil, err
 	}
 
-	return &Project{Root: root, Config: cfg, DB: db}, nil
+	blobs, err := blob.NewFSStore(filepath.Join(ditsPath, "blobs"))
+	if err != nil {
+		db.Close()
+		return nil, err
+	}
+
+	return &Project{Root: root, Config: cfg, DB: db, Blobs: blobs}, nil
 }
 
 // Load opens an existing DITS project from the given directory.
@@ -92,7 +100,13 @@ func Load(root string) (*Project, error) {
 		return nil, err
 	}
 
-	return &Project{Root: root, Config: cfg, DB: db}, nil
+	blobs, err := blob.NewFSStore(filepath.Join(ditsPath, "blobs"))
+	if err != nil {
+		db.Close()
+		return nil, err
+	}
+
+	return &Project{Root: root, Config: cfg, DB: db, Blobs: blobs}, nil
 }
 
 // FindRoot walks up from the current directory to find a .dits directory.
