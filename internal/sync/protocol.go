@@ -10,6 +10,8 @@ type SyncRequest struct {
 	Events      []domain.Event     `json:"events"`
 	MetaVersion domain.MetaVersion `json:"meta_version"`
 	Meta        *domain.MetaConfig `json:"meta,omitempty"`
+	ActorID     domain.ActorID     `json:"actor_id,omitempty"`
+	PublicKey   string             `json:"public_key,omitempty"`
 }
 
 // SyncResponse is returned by the server to the client.

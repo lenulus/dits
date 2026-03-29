@@ -26,4 +26,5 @@ func init() {
 	rootCmd.AddCommand(syncCmd)
 	rootCmd.AddCommand(remoteCmd)
 	rootCmd.AddCommand(metaCmd)
+	rootCmd.AddCommand(identityCmd)
 }

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/lenulus/pf/internal/blob"
+	"github.com/lenulus/pf/internal/crypto"
 	"github.com/lenulus/pf/internal/domain"
 	"github.com/lenulus/pf/internal/project"
 	"github.com/lenulus/pf/internal/store"
@@ -66,6 +67,9 @@ var issueCreateCmd = &cobra.Command{
 		if err := domain.ValidateEvent(event, meta); err != nil {
 			return fmt.Errorf("validation: %w", err)
 		}
+		if err := signEvent(proj, &event); err != nil {
+			return fmt.Errorf("signing: %w", err)
+		}
 
 		if err := proj.DB.AppendEvents(ctx, []domain.Event{event}); err != nil {
 			return fmt.Errorf("appending event: %w", err)
@@ -86,6 +90,9 @@ var issueCreateCmd = &cobra.Command{
 			}
 			if err := domain.ValidateEvent(labelEvt, meta); err != nil {
 				return fmt.Errorf("validation: %w", err)
+			}
+			if err := signEvent(proj, &labelEvt); err != nil {
+				return fmt.Errorf("signing: %w", err)
 			}
 			if err := proj.DB.AppendEvents(ctx, []domain.Event{labelEvt}); err != nil {
 				return err
@@ -606,7 +613,18 @@ func resolveIssue(ctx context.Context, proj *project.Project, ref string) (*doma
 	return nil, fmt.Errorf("issue not found: %s", ref)
 }
 
+func signEvent(proj *project.Project, e *domain.Event) error {
+	if k := proj.PrivKey(); k != nil {
+		return crypto.SignEvent(e, k)
+	}
+	return nil
+}
+
 func appendAndMaterialize(ctx context.Context, proj *project.Project, issueID domain.CanonicalID, event domain.Event) error {
+	if err := signEvent(proj, &event); err != nil {
+		return fmt.Errorf("signing event: %w", err)
+	}
+
 	if err := proj.DB.AppendEvents(ctx, []domain.Event{event}); err != nil {
 		return fmt.Errorf("appending event: %w", err)
 	}

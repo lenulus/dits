@@ -44,6 +44,11 @@ type MetaStore interface {
 
 var ErrMetaConflict = fmt.Errorf("meta version conflict: not at HEAD")
 
+type ActorStore interface {
+	RegisterActor(ctx context.Context, actorID domain.ActorID, publicKey string, nodeID domain.NodeID) error
+	GetActorPublicKey(ctx context.Context, actorID domain.ActorID) (string, error)
+}
+
 type SyncStore interface {
 	GetRemoteHeads(ctx context.Context, nodeID domain.NodeID) ([]domain.EventID, error)
 	SetRemoteHeads(ctx context.Context, nodeID domain.NodeID, heads []domain.EventID) error
@@ -56,5 +61,6 @@ type DB interface {
 	IssueStore
 	MetaStore
 	SyncStore
+	ActorStore
 	Close() error
 }

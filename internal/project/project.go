@@ -2,12 +2,14 @@ package project
 
 import (
 	"context"
+	"crypto/ed25519"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 
 	"github.com/lenulus/pf/internal/blob"
+	"github.com/lenulus/pf/internal/crypto"
 	"github.com/lenulus/pf/internal/domain"
 	"github.com/lenulus/pf/internal/store"
 	"github.com/lenulus/pf/internal/store/sqlite"
@@ -33,10 +35,20 @@ func (p *Project) SaveConfig() error {
 }
 
 type Project struct {
-	Root  string
-	Config Config
-	DB    store.DB
-	Blobs blob.Store
+	Root     string
+	Config   Config
+	Identity *crypto.Identity
+	DB       store.DB
+	Blobs    blob.Store
+}
+
+// PrivKey returns the project's signing key, or nil if no identity.
+func (p *Project) PrivKey() ed25519.PrivateKey {
+	if p.Identity == nil {
+		return nil
+	}
+	k, _ := p.Identity.PrivKey()
+	return k
 }
 
 // Init creates a new DITS project in the given directory.
@@ -46,10 +58,19 @@ func Init(root, projectKey string) (*Project, error) {
 		return nil, fmt.Errorf("creating .dits directory: %w", err)
 	}
 
+	// Generate identity.
+	identity, err := crypto.GenerateIdentity()
+	if err != nil {
+		return nil, fmt.Errorf("generating identity: %w", err)
+	}
+	if err := crypto.SaveIdentity(ditsPath, identity); err != nil {
+		return nil, fmt.Errorf("saving identity: %w", err)
+	}
+
 	cfg := Config{
 		ProjectKey: projectKey,
 		NodeID:     domain.NewNodeID(),
-		ActorID:    domain.ActorID(fmt.Sprintf("actor_%s", projectKey)),
+		ActorID:    identity.ActorID,
 	}
 
 	cfgData, err := json.MarshalIndent(cfg, "", "  ")
@@ -78,7 +99,7 @@ func Init(root, projectKey string) (*Project, error) {
 		return nil, err
 	}
 
-	return &Project{Root: root, Config: cfg, DB: db, Blobs: blobs}, nil
+	return &Project{Root: root, Config: cfg, Identity: identity, DB: db, Blobs: blobs}, nil
 }
 
 // Load opens an existing DITS project from the given directory.
@@ -95,6 +116,12 @@ func Load(root string) (*Project, error) {
 		return nil, fmt.Errorf("parsing config: %w", err)
 	}
 
+	// Load identity (optional for backward compat with old projects).
+	identity, err := crypto.LoadIdentity(ditsPath)
+	if err != nil {
+		return nil, fmt.Errorf("loading identity: %w", err)
+	}
+
 	db, err := sqlite.Open(filepath.Join(ditsPath, "dits.db"))
 	if err != nil {
 		return nil, err
@@ -106,7 +133,7 @@ func Load(root string) (*Project, error) {
 		return nil, err
 	}
 
-	return &Project{Root: root, Config: cfg, DB: db, Blobs: blobs}, nil
+	return &Project{Root: root, Config: cfg, Identity: identity, DB: db, Blobs: blobs}, nil
 }
 
 // FindRoot walks up from the current directory to find a .dits directory.

@@ -2,8 +2,12 @@ package sync
 
 import (
 	"context"
+	"crypto/ed25519"
+	"encoding/hex"
 	"fmt"
+	"log/slog"
 
+	"github.com/lenulus/pf/internal/crypto"
 	"github.com/lenulus/pf/internal/domain"
 	"github.com/lenulus/pf/internal/store"
 )
@@ -11,11 +15,16 @@ import (
 // Engine handles sync logic for both server and client sides.
 // The same logic applies: ingest foreign events, compute missing events to send back.
 type Engine struct {
-	db store.DB
+	db     store.DB
+	logger *slog.Logger
 }
 
 func NewEngine(db store.DB) *Engine {
-	return &Engine{db: db}
+	return &Engine{db: db, logger: slog.Default()}
+}
+
+func NewEngineWithLogger(db store.DB, logger *slog.Logger) *Engine {
+	return &Engine{db: db, logger: logger}
 }
 
 // HandleSync processes a sync request (server-side).
@@ -25,6 +34,18 @@ func NewEngine(db store.DB) *Engine {
 // 4. Computes events the client is missing
 // 5. Returns response
 func (e *Engine) HandleSync(ctx context.Context, req SyncRequest) (*SyncResponse, error) {
+	// 0. Register actor if public key provided.
+	if req.ActorID != "" && req.PublicKey != "" {
+		if err := e.db.RegisterActor(ctx, req.ActorID, req.PublicKey, req.NodeID); err != nil {
+			e.logger.Warn("failed to register actor", "actor_id", req.ActorID, "error", err)
+		}
+	}
+
+	// 0b. Verify signatures on pushed events (warn mode — don't reject).
+	if len(req.Events) > 0 {
+		e.verifyEventSignatures(ctx, req.Events)
+	}
+
 	// 1. Ingest client events (INSERT OR IGNORE for idempotency).
 	if len(req.Events) > 0 {
 		if err := e.db.AppendEvents(ctx, req.Events); err != nil {
@@ -306,4 +327,37 @@ func (e *Engine) rematerialize(ctx context.Context, issueID domain.CanonicalID) 
 	}
 
 	return e.db.UpsertIssue(ctx, issue)
+}
+
+// verifyEventSignatures checks signatures on events in warn mode (logs warnings, doesn't reject).
+func (e *Engine) verifyEventSignatures(ctx context.Context, events []domain.Event) {
+	for _, evt := range events {
+		if len(evt.Signature) == 0 {
+			e.logger.Debug("event has no signature", "event_id", evt.ID, "actor_id", evt.ActorID)
+			continue
+		}
+
+		pubKeyHex, err := e.db.GetActorPublicKey(ctx, evt.ActorID)
+		if err != nil || pubKeyHex == "" {
+			e.logger.Debug("no public key for actor, skipping verification", "actor_id", evt.ActorID)
+			continue
+		}
+
+		pubKeyBytes, err := hex.DecodeString(pubKeyHex)
+		if err != nil {
+			e.logger.Warn("invalid public key for actor", "actor_id", evt.ActorID, "error", err)
+			continue
+		}
+
+		valid, err := crypto.VerifyEvent(&evt, ed25519.PublicKey(pubKeyBytes))
+		if err != nil {
+			e.logger.Warn("signature verification error", "event_id", evt.ID, "error", err)
+			continue
+		}
+		if !valid {
+			e.logger.Warn("INVALID SIGNATURE", "event_id", evt.ID, "actor_id", evt.ActorID)
+		} else {
+			e.logger.Debug("signature verified", "event_id", evt.ID)
+		}
+	}
 }

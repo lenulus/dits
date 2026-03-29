@@ -42,7 +42,7 @@ func (s *Store) Close() error {
 }
 
 func (s *Store) migrate() error {
-	migrations := []string{"migrations/001_initial.sql", "migrations/002_sync_state.sql", "migrations/003_attachments.sql"}
+	migrations := []string{"migrations/001_initial.sql", "migrations/002_sync_state.sql", "migrations/003_attachments.sql", "migrations/004_actors.sql"}
 	for _, m := range migrations {
 		data, err := migrationsFS.ReadFile(m)
 		if err != nil {
@@ -732,4 +732,23 @@ func (s *Store) SetSyncRemote(ctx context.Context, nodeID domain.NodeID, url str
 		 ON CONFLICT(node_id) DO UPDATE SET url = excluded.url`,
 		nodeID, url)
 	return err
+}
+
+// --- ActorStore ---
+
+func (s *Store) RegisterActor(ctx context.Context, actorID domain.ActorID, publicKey string, nodeID domain.NodeID) error {
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO actors (actor_id, public_key, node_id) VALUES (?, ?, ?)
+		 ON CONFLICT(actor_id) DO UPDATE SET public_key = excluded.public_key, node_id = excluded.node_id`,
+		actorID, publicKey, nodeID)
+	return err
+}
+
+func (s *Store) GetActorPublicKey(ctx context.Context, actorID domain.ActorID) (string, error) {
+	var pubKey string
+	err := s.db.QueryRowContext(ctx, `SELECT public_key FROM actors WHERE actor_id = ?`, actorID).Scan(&pubKey)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	return pubKey, err
 }

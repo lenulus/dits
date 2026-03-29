@@ -53,6 +53,12 @@ var syncCmd = &cobra.Command{
 			return fmt.Errorf("building sync request: %w", err)
 		}
 
+		// Include identity for actor registration.
+		if proj.Identity != nil {
+			req.ActorID = proj.Identity.ActorID
+			req.PublicKey = proj.Identity.PublicKey
+		}
+
 		fmt.Printf("Syncing with %s...\n", serverURL)
 		fmt.Printf("  Pushing %d events\n", len(req.Events))
 
