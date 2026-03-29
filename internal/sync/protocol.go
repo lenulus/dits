@@ -4,11 +4,12 @@ import "github.com/lenulus/pf/internal/domain"
 
 // SyncRequest is sent by the client to the server.
 type SyncRequest struct {
-	NodeID      domain.NodeID    `json:"node_id"`
-	ProjectKey  string           `json:"project_key"`
-	Heads       []domain.EventID `json:"heads"`
-	Events      []domain.Event   `json:"events"`
+	NodeID      domain.NodeID      `json:"node_id"`
+	ProjectKey  string             `json:"project_key"`
+	Heads       []domain.EventID   `json:"heads"`
+	Events      []domain.Event     `json:"events"`
 	MetaVersion domain.MetaVersion `json:"meta_version"`
+	Meta        *domain.MetaConfig `json:"meta,omitempty"`
 }
 
 // SyncResponse is returned by the server to the client.

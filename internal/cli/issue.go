@@ -27,6 +27,8 @@ var issueCreateCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		title, _ := cmd.Flags().GetString("title")
 		body, _ := cmd.Flags().GetString("body")
+		labels, _ := cmd.Flags().GetStringSlice("label")
+		issueType, _ := cmd.Flags().GetString("type")
 		if title == "" {
 			return fmt.Errorf("--title is required")
 		}
@@ -38,22 +40,56 @@ var issueCreateCmd = &cobra.Command{
 		defer proj.DB.Close()
 
 		ctx := context.Background()
+		meta, err := loadMeta(ctx, proj)
+		if err != nil {
+			return err
+		}
+
+		if issueType == "" {
+			issueType = "task"
+		}
+
 		issueID := domain.NewCanonicalID()
-		eventID := domain.NewEventID()
 		now := time.Now().UTC()
 
 		event := domain.Event{
-			ID:             eventID,
+			ID:             domain.NewEventID(),
 			IssueID:        issueID,
 			Type:           domain.EventIssueCreated,
 			ParentEventIDs: nil,
+			MetaVersion:    meta.Version,
 			ActorID:        proj.Config.ActorID,
 			Timestamp:      now,
-			Payload:        domain.MustMarshalPayload(domain.IssueCreatedPayload{Title: title, Body: body}),
+			Payload:        domain.MustMarshalPayload(domain.IssueCreatedPayload{Title: title, Body: body, TypeSlug: issueType}),
+		}
+
+		if err := domain.ValidateEvent(event, meta); err != nil {
+			return fmt.Errorf("validation: %w", err)
 		}
 
 		if err := proj.DB.AppendEvents(ctx, []domain.Event{event}); err != nil {
 			return fmt.Errorf("appending event: %w", err)
+		}
+
+		// Add label events if specified.
+		for _, l := range labels {
+			heads, _ := proj.DB.GetHeads(ctx, issueID)
+			labelEvt := domain.Event{
+				ID:             domain.NewEventID(),
+				IssueID:        issueID,
+				Type:           domain.EventIssueLabelAdded,
+				ParentEventIDs: heads,
+				MetaVersion:    meta.Version,
+				ActorID:        proj.Config.ActorID,
+				Timestamp:      time.Now().UTC(),
+				Payload:        domain.MustMarshalPayload(domain.LabelPayload{LabelSlug: l}),
+			}
+			if err := domain.ValidateEvent(labelEvt, meta); err != nil {
+				return fmt.Errorf("validation: %w", err)
+			}
+			if err := proj.DB.AppendEvents(ctx, []domain.Event{labelEvt}); err != nil {
+				return err
+			}
 		}
 
 		// Materialize.
@@ -516,6 +552,8 @@ func init() {
 
 	issueCreateCmd.Flags().StringP("title", "t", "", "Issue title")
 	issueCreateCmd.Flags().StringP("body", "b", "", "Issue body")
+	issueCreateCmd.Flags().StringSliceP("label", "l", nil, "Labels to add (comma-separated or repeated)")
+	issueCreateCmd.Flags().String("type", "task", "Issue type slug")
 	issueCreateCmd.MarkFlagRequired("title")
 
 	issueListCmd.Flags().StringP("status", "s", "", "Filter by status")
@@ -526,6 +564,17 @@ func init() {
 }
 
 // --- Helpers ---
+
+func loadMeta(ctx context.Context, proj *project.Project) (*domain.MetaConfig, error) {
+	meta, err := proj.DB.GetCurrentMeta(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if meta == nil {
+		return nil, fmt.Errorf("no meta configuration found")
+	}
+	return meta, nil
+}
 
 func loadProject() (*project.Project, error) {
 	root, err := project.FindRoot()

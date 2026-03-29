@@ -32,14 +32,27 @@ func (e *Engine) HandleSync(ctx context.Context, req SyncRequest) (*SyncResponse
 		}
 	}
 
-	// 2. Assign shared IDs to new issues and rematerialize.
-	sharedIDs := make(map[domain.CanonicalID]domain.SharedID)
-	affectedIssues, err := e.db.GetAffectedIssueIDs(ctx, req.Events)
+	// 1b. Accept client meta if it has a higher version than ours.
+	meta, err := e.db.GetCurrentMeta(ctx)
 	if err != nil {
 		return nil, err
 	}
+	if req.Meta != nil {
+		serverVersion := domain.MetaVersion(0)
+		if meta != nil {
+			serverVersion = meta.Version
+		}
+		if req.Meta.Version > serverVersion {
+			if err := e.db.SaveMeta(ctx, req.Meta); err != nil {
+				return nil, fmt.Errorf("saving client meta: %w", err)
+			}
+			meta = req.Meta
+		}
+	}
 
-	meta, err := e.db.GetCurrentMeta(ctx)
+	// 2. Assign shared IDs to new issues and rematerialize.
+	sharedIDs := make(map[domain.CanonicalID]domain.SharedID)
+	affectedIssues, err := e.db.GetAffectedIssueIDs(ctx, req.Events)
 	if err != nil {
 		return nil, err
 	}
@@ -153,8 +166,15 @@ func (e *Engine) ApplySync(ctx context.Context, resp *SyncResponse, serverNodeID
 
 	// 4. Update meta if server sent a newer version.
 	if resp.Meta != nil {
-		if err := e.db.SaveMeta(ctx, resp.Meta); err != nil {
-			return fmt.Errorf("saving meta: %w", err)
+		localMeta, _ := e.db.GetCurrentMeta(ctx)
+		localVersion := domain.MetaVersion(0)
+		if localMeta != nil {
+			localVersion = localMeta.Version
+		}
+		if resp.Meta.Version > localVersion {
+			if err := e.db.SaveMeta(ctx, resp.Meta); err != nil {
+				return fmt.Errorf("saving meta: %w", err)
+			}
 		}
 	}
 
@@ -199,6 +219,7 @@ func (e *Engine) BuildSyncRequest(ctx context.Context, nodeID domain.NodeID, pro
 		Heads:       localHeads,
 		Events:      eventsToPush,
 		MetaVersion: metaVersion,
+		Meta:        meta,
 	}, nil
 }
 

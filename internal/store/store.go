@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/lenulus/pf/internal/domain"
 )
@@ -36,7 +37,12 @@ type IssueStore interface {
 type MetaStore interface {
 	GetCurrentMeta(ctx context.Context) (*domain.MetaConfig, error)
 	SaveMeta(ctx context.Context, meta *domain.MetaConfig) error
+	// SaveMetaIfVersion saves only if expectedVersion matches current HEAD.
+	// Returns ErrMetaConflict if the version doesn't match.
+	SaveMetaIfVersion(ctx context.Context, meta *domain.MetaConfig, expectedVersion domain.MetaVersion) error
 }
+
+var ErrMetaConflict = fmt.Errorf("meta version conflict: not at HEAD")
 
 type SyncStore interface {
 	GetRemoteHeads(ctx context.Context, nodeID domain.NodeID) ([]domain.EventID, error)

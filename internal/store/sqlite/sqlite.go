@@ -452,6 +452,36 @@ func (s *Store) SaveMeta(ctx context.Context, meta *domain.MetaConfig) error {
 	return err
 }
 
+func (s *Store) SaveMetaIfVersion(ctx context.Context, meta *domain.MetaConfig, expectedVersion domain.MetaVersion) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	// Check current HEAD version.
+	var currentVersion int64
+	err = tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(version), 0) FROM meta_config`).Scan(&currentVersion)
+	if err != nil {
+		return err
+	}
+	if domain.MetaVersion(currentVersion) != expectedVersion {
+		return store.ErrMetaConflict
+	}
+
+	data, err := json.Marshal(meta)
+	if err != nil {
+		return err
+	}
+	_, err = tx.ExecContext(ctx,
+		`INSERT OR REPLACE INTO meta_config (version, config_json) VALUES (?, ?)`,
+		meta.Version, string(data))
+	if err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 // --- Helpers ---
 
 type scanner interface {

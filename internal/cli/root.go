@@ -25,4 +25,5 @@ func init() {
 	rootCmd.AddCommand(issueCmd)
 	rootCmd.AddCommand(syncCmd)
 	rootCmd.AddCommand(remoteCmd)
+	rootCmd.AddCommand(metaCmd)
 }
