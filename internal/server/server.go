@@ -10,6 +10,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/lenulus/pf/internal/blob"
+	"github.com/lenulus/pf/internal/domain"
 	"github.com/lenulus/pf/internal/store"
 	dsync "github.com/lenulus/pf/internal/sync"
 )
@@ -41,6 +42,11 @@ func New(db store.DB, blobs blob.Store, logger *slog.Logger) *Server {
 	r.Post("/api/v1/blobs/check", s.handleBlobCheck)
 	r.Put("/api/v1/blobs/{hash}", s.handleBlobUpload)
 	r.Get("/api/v1/blobs/{hash}", s.handleBlobDownload)
+
+	// Query API
+	r.Get("/api/v1/issues", s.handleListIssues)
+	r.Get("/api/v1/issues/{id}", s.handleGetIssue)
+	r.Get("/api/v1/meta", s.handleGetMeta)
 
 	s.router = r
 	return s
@@ -168,6 +174,100 @@ func (s *Server) handleBlobDownload(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/octet-stream")
 	io.Copy(w, rc)
+}
+
+// --- Query API ---
+
+func (s *Server) handleListIssues(w http.ResponseWriter, r *http.Request) {
+	filter := store.IssueFilter{}
+
+	if v := r.URL.Query().Get("status"); v != "" {
+		filter.Status = v
+	}
+	if v := r.URL.Query().Get("label"); v != "" {
+		filter.Label = v
+	}
+	if v := r.URL.Query().Get("q"); v != "" {
+		filter.Query = v
+	}
+
+	issues, err := s.db.ListIssues(r.Context(), filter)
+	if err != nil {
+		s.jsonError(w, fmt.Sprintf("listing issues: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	type issueJSON struct {
+		ID        string   `json:"id"`
+		SharedID  string   `json:"shared_id,omitempty"`
+		Title     string   `json:"title"`
+		Status    string   `json:"status"`
+		Type      string   `json:"type"`
+		Priority  string   `json:"priority"`
+		Labels    []string `json:"labels"`
+		CreatedBy string   `json:"created_by"`
+		CreatedAt string   `json:"created_at"`
+		UpdatedAt string   `json:"updated_at"`
+	}
+
+	result := make([]issueJSON, 0, len(issues))
+	for _, iss := range issues {
+		result = append(result, issueJSON{
+			ID:        string(iss.ID),
+			SharedID:  string(iss.SharedID),
+			Title:     iss.Title,
+			Status:    iss.Status,
+			Type:      iss.TypeSlug,
+			Priority:  iss.Priority,
+			Labels:    iss.Labels,
+			CreatedBy: string(iss.CreatedBy),
+			CreatedAt: iss.CreatedAt.Format("2006-01-02T15:04:05Z"),
+			UpdatedAt: iss.UpdatedAt.Format("2006-01-02T15:04:05Z"),
+		})
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"issues": result, "count": len(result)})
+}
+
+func (s *Server) handleGetIssue(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+
+	// Try shared ID first, then canonical.
+	issue, err := s.db.GetIssueBySharedID(r.Context(), domain.SharedID(id))
+	if err != nil {
+		s.jsonError(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	if issue == nil {
+		issue, err = s.db.GetIssue(r.Context(), domain.CanonicalID(id))
+		if err != nil {
+			s.jsonError(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+	}
+	if issue == nil {
+		s.jsonError(w, "issue not found", http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(issue)
+}
+
+func (s *Server) handleGetMeta(w http.ResponseWriter, r *http.Request) {
+	meta, err := s.db.GetCurrentMeta(r.Context())
+	if err != nil {
+		s.jsonError(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	if meta == nil {
+		s.jsonError(w, "no meta configuration", http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(meta)
 }
 
 func (s *Server) jsonError(w http.ResponseWriter, msg string, code int) {

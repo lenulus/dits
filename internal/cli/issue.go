@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"mime"
 	"os"
@@ -154,17 +155,33 @@ var issueListCmd = &cobra.Command{
 		}
 
 		if len(issues) == 0 {
-			fmt.Println("No issues found.")
+			if !jsonOutput(cmd) {
+				fmt.Println("No issues found.")
+			} else {
+				fmt.Println("[]")
+			}
 			return nil
+		}
+
+		// Filter closed if not --all.
+		if !all {
+			var filtered []domain.Issue
+			for _, iss := range issues {
+				if iss.Status != "closed" {
+					filtered = append(filtered, iss)
+				}
+			}
+			issues = filtered
+		}
+
+		if jsonOutput(cmd) {
+			return printJSON(issues)
 		}
 
 		for _, iss := range issues {
 			id := string(iss.SharedID)
 			if id == "" {
 				id = string(iss.ID)
-			}
-			if !all && iss.Status == "closed" {
-				continue
 			}
 			fmt.Printf("%-12s %-12s %s\n", id, iss.Status, iss.Title)
 		}
@@ -187,6 +204,10 @@ var issueShowCmd = &cobra.Command{
 		issue, err := resolveIssue(ctx, proj, args[0])
 		if err != nil {
 			return err
+		}
+
+		if jsonOutput(cmd) {
+			return printJSON(issue)
 		}
 
 		id := string(issue.SharedID)
@@ -213,6 +234,12 @@ var issueShowCmd = &cobra.Command{
 			}
 			fmt.Printf("Assigned: %s\n", strings.Join(assignees, ", "))
 		}
+		if len(issue.Relations) > 0 {
+			fmt.Println("\nRelations:")
+			for _, r := range issue.Relations {
+				fmt.Printf("  %s %s\n", r.Type, r.TargetIssue)
+			}
+		}
 		if issue.Body != "" {
 			fmt.Printf("\n%s\n", issue.Body)
 		}
@@ -228,6 +255,22 @@ var issueShowCmd = &cobra.Command{
 			fmt.Printf("\n--- Comments (%d) ---\n", len(issue.Comments))
 			for _, c := range issue.Comments {
 				fmt.Printf("\n[%s] %s:\n%s\n", c.Timestamp.Format(time.RFC3339), c.ActorID, c.Body)
+			}
+		}
+
+		// Overlay data (local only).
+		privateLabels, _ := proj.DB.GetPrivateLabels(ctx, issue.ID)
+		annotations, _ := proj.DB.GetAnnotations(ctx, issue.ID)
+		if len(privateLabels) > 0 || len(annotations) > 0 {
+			fmt.Printf("\n--- Local (not synced) ---\n")
+			if len(privateLabels) > 0 {
+				fmt.Printf("Private labels: %s\n", strings.Join(privateLabels, ", "))
+			}
+			if len(annotations) > 0 {
+				fmt.Println("Annotations:")
+				for k, v := range annotations {
+					fmt.Printf("  %-20s %s\n", k, v)
+				}
 			}
 		}
 
@@ -565,12 +608,29 @@ func init() {
 
 	issueListCmd.Flags().StringP("status", "s", "", "Filter by status")
 	issueListCmd.Flags().BoolP("all", "a", false, "Show all issues including closed")
+	issueListCmd.Flags().Bool("json", false, "Output as JSON")
+
+	issueShowCmd.Flags().Bool("json", false, "Output as JSON")
 
 	issueCommentCmd.Flags().StringP("body", "b", "", "Comment body")
 	issueCommentCmd.MarkFlagRequired("body")
 }
 
 // --- Helpers ---
+
+func jsonOutput(cmd *cobra.Command) bool {
+	v, _ := cmd.Flags().GetBool("json")
+	return v
+}
+
+func printJSON(v any) error {
+	data, err := json.MarshalIndent(v, "", "  ")
+	if err != nil {
+		return err
+	}
+	fmt.Println(string(data))
+	return nil
+}
 
 func loadMeta(ctx context.Context, proj *project.Project) (*domain.MetaConfig, error) {
 	meta, err := proj.DB.GetCurrentMeta(ctx)

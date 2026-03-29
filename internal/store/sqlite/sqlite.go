@@ -42,7 +42,7 @@ func (s *Store) Close() error {
 }
 
 func (s *Store) migrate() error {
-	migrations := []string{"migrations/001_initial.sql", "migrations/002_sync_state.sql", "migrations/003_attachments.sql", "migrations/004_actors.sql"}
+	migrations := []string{"migrations/001_initial.sql", "migrations/002_sync_state.sql", "migrations/003_attachments.sql", "migrations/004_actors.sql", "migrations/005_overlay.sql", "migrations/006_relations.sql"}
 	for _, m := range migrations {
 		data, err := migrationsFS.ReadFile(m)
 		if err != nil {
@@ -303,6 +303,17 @@ func (s *Store) UpsertIssue(ctx context.Context, issue *domain.Issue) error {
 			a.ID, issue.ID, a.ContentHash, a.Filename, a.MimeType, a.SizeBytes,
 			a.AddedBy, a.AddedAt.UTC().Format(time.RFC3339Nano),
 		)
+		if err != nil {
+			return err
+		}
+	}
+
+	// Replace relations.
+	_, _ = tx.ExecContext(ctx, `DELETE FROM issue_relations WHERE issue_id = ?`, issue.ID)
+	for _, r := range issue.Relations {
+		_, err := tx.ExecContext(ctx,
+			`INSERT INTO issue_relations (issue_id, relation_type, target_issue) VALUES (?, ?, ?)`,
+			issue.ID, r.Type, r.TargetIssue)
 		if err != nil {
 			return err
 		}
@@ -642,6 +653,22 @@ func (s *Store) loadIssueRelations(ctx context.Context, issue *domain.Issue) err
 		issue.Attachments = append(issue.Attachments, a)
 	}
 
+	// Relations
+	rows5, err := s.db.QueryContext(ctx,
+		`SELECT relation_type, target_issue FROM issue_relations WHERE issue_id = ? ORDER BY relation_type, target_issue`, issue.ID)
+	if err != nil {
+		return err
+	}
+	defer rows5.Close()
+	issue.Relations = []domain.Relation{}
+	for rows5.Next() {
+		var r domain.Relation
+		if err := rows5.Scan(&r.Type, &r.TargetIssue); err != nil {
+			return err
+		}
+		issue.Relations = append(issue.Relations, r)
+	}
+
 	return nil
 }
 
@@ -751,4 +778,71 @@ func (s *Store) GetActorPublicKey(ctx context.Context, actorID domain.ActorID) (
 		return "", nil
 	}
 	return pubKey, err
+}
+
+// --- OverlayStore ---
+
+func (s *Store) SetAnnotation(ctx context.Context, issueID domain.CanonicalID, key, value string) error {
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO overlay_annotations (issue_id, key, value) VALUES (?, ?, ?)
+		 ON CONFLICT(issue_id, key) DO UPDATE SET value = excluded.value`,
+		issueID, key, value)
+	return err
+}
+
+func (s *Store) GetAnnotations(ctx context.Context, issueID domain.CanonicalID) (map[string]string, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT key, value FROM overlay_annotations WHERE issue_id = ? ORDER BY key`, issueID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := make(map[string]string)
+	for rows.Next() {
+		var k, v string
+		if err := rows.Scan(&k, &v); err != nil {
+			return nil, err
+		}
+		result[k] = v
+	}
+	return result, rows.Err()
+}
+
+func (s *Store) DeleteAnnotation(ctx context.Context, issueID domain.CanonicalID, key string) error {
+	_, err := s.db.ExecContext(ctx,
+		`DELETE FROM overlay_annotations WHERE issue_id = ? AND key = ?`, issueID, key)
+	return err
+}
+
+func (s *Store) AddPrivateLabel(ctx context.Context, issueID domain.CanonicalID, label string) error {
+	_, err := s.db.ExecContext(ctx,
+		`INSERT OR IGNORE INTO overlay_labels (issue_id, label) VALUES (?, ?)`,
+		issueID, label)
+	return err
+}
+
+func (s *Store) RemovePrivateLabel(ctx context.Context, issueID domain.CanonicalID, label string) error {
+	_, err := s.db.ExecContext(ctx,
+		`DELETE FROM overlay_labels WHERE issue_id = ? AND label = ?`, issueID, label)
+	return err
+}
+
+func (s *Store) GetPrivateLabels(ctx context.Context, issueID domain.CanonicalID) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT label FROM overlay_labels WHERE issue_id = ? ORDER BY label`, issueID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var labels []string
+	for rows.Next() {
+		var l string
+		if err := rows.Scan(&l); err != nil {
+			return nil, err
+		}
+		labels = append(labels, l)
+	}
+	return labels, rows.Err()
 }

@@ -56,11 +56,21 @@ type SyncStore interface {
 	SetSyncRemote(ctx context.Context, nodeID domain.NodeID, url string) error
 }
 
+type OverlayStore interface {
+	SetAnnotation(ctx context.Context, issueID domain.CanonicalID, key, value string) error
+	GetAnnotations(ctx context.Context, issueID domain.CanonicalID) (map[string]string, error)
+	DeleteAnnotation(ctx context.Context, issueID domain.CanonicalID, key string) error
+	AddPrivateLabel(ctx context.Context, issueID domain.CanonicalID, label string) error
+	RemovePrivateLabel(ctx context.Context, issueID domain.CanonicalID, label string) error
+	GetPrivateLabels(ctx context.Context, issueID domain.CanonicalID) ([]string, error)
+}
+
 type DB interface {
 	EventStore
 	IssueStore
 	MetaStore
 	SyncStore
 	ActorStore
+	OverlayStore
 	Close() error
 }
