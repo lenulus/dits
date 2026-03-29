@@ -21,6 +21,8 @@ type EventStore interface {
 	GetEventsForIssue(ctx context.Context, issueID domain.CanonicalID) ([]domain.Event, error)
 	GetHeads(ctx context.Context, issueID domain.CanonicalID) ([]domain.EventID, error)
 	GetAllHeads(ctx context.Context) ([]domain.EventID, error)
+	HasEvent(ctx context.Context, id domain.EventID) (bool, error)
+	GetAffectedIssueIDs(ctx context.Context, events []domain.Event) ([]domain.CanonicalID, error)
 }
 
 type IssueStore interface {
@@ -36,9 +38,17 @@ type MetaStore interface {
 	SaveMeta(ctx context.Context, meta *domain.MetaConfig) error
 }
 
+type SyncStore interface {
+	GetRemoteHeads(ctx context.Context, nodeID domain.NodeID) ([]domain.EventID, error)
+	SetRemoteHeads(ctx context.Context, nodeID domain.NodeID, heads []domain.EventID) error
+	GetSyncRemoteURL(ctx context.Context, nodeID domain.NodeID) (string, error)
+	SetSyncRemote(ctx context.Context, nodeID domain.NodeID, url string) error
+}
+
 type DB interface {
 	EventStore
 	IssueStore
 	MetaStore
+	SyncStore
 	Close() error
 }

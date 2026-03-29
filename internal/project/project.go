@@ -15,9 +15,20 @@ import (
 const DitsDir = ".dits"
 
 type Config struct {
-	ProjectKey string       `json:"project_key"`
-	NodeID     domain.NodeID `json:"node_id"`
+	ProjectKey string         `json:"project_key"`
+	NodeID     domain.NodeID  `json:"node_id"`
 	ActorID    domain.ActorID `json:"actor_id"`
+	ServerURL  string         `json:"server_url,omitempty"`
+}
+
+// SaveConfig writes the config back to disk.
+func (p *Project) SaveConfig() error {
+	ditsPath := filepath.Join(p.Root, DitsDir)
+	data, err := json.MarshalIndent(p.Config, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(ditsPath, "config.json"), data, 0o644)
 }
 
 type Project struct {

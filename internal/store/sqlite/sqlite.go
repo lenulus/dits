@@ -42,12 +42,17 @@ func (s *Store) Close() error {
 }
 
 func (s *Store) migrate() error {
-	data, err := migrationsFS.ReadFile("migrations/001_initial.sql")
-	if err != nil {
-		return err
+	migrations := []string{"migrations/001_initial.sql", "migrations/002_sync_state.sql"}
+	for _, m := range migrations {
+		data, err := migrationsFS.ReadFile(m)
+		if err != nil {
+			return fmt.Errorf("reading %s: %w", m, err)
+		}
+		if _, err := s.db.Exec(string(data)); err != nil {
+			return fmt.Errorf("executing %s: %w", m, err)
+		}
 	}
-	_, err = s.db.Exec(string(data))
-	return err
+	return nil
 }
 
 // --- EventStore ---
@@ -583,4 +588,85 @@ func marshalEventIDs(ids []domain.EventID) string {
 	}
 	data, _ := json.Marshal(ids)
 	return string(data)
+}
+
+// --- EventStore extensions ---
+
+func (s *Store) HasEvent(ctx context.Context, id domain.EventID) (bool, error) {
+	var count int
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM events WHERE id = ?`, id).Scan(&count)
+	return count > 0, err
+}
+
+func (s *Store) GetAffectedIssueIDs(ctx context.Context, events []domain.Event) ([]domain.CanonicalID, error) {
+	seen := make(map[domain.CanonicalID]struct{})
+	var ids []domain.CanonicalID
+	for _, e := range events {
+		if _, ok := seen[e.IssueID]; !ok {
+			seen[e.IssueID] = struct{}{}
+			ids = append(ids, e.IssueID)
+		}
+	}
+	return ids, nil
+}
+
+// --- SyncStore ---
+
+func (s *Store) GetRemoteHeads(ctx context.Context, nodeID domain.NodeID) ([]domain.EventID, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT event_id FROM sync_remote_heads WHERE node_id = ?`, nodeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var heads []domain.EventID
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		heads = append(heads, domain.EventID(id))
+	}
+	return heads, rows.Err()
+}
+
+func (s *Store) SetRemoteHeads(ctx context.Context, nodeID domain.NodeID, heads []domain.EventID) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	_, err = tx.ExecContext(ctx, `DELETE FROM sync_remote_heads WHERE node_id = ?`, nodeID)
+	if err != nil {
+		return err
+	}
+
+	for _, h := range heads {
+		_, err := tx.ExecContext(ctx,
+			`INSERT INTO sync_remote_heads (node_id, event_id) VALUES (?, ?)`, nodeID, h)
+		if err != nil {
+			return err
+		}
+	}
+
+	return tx.Commit()
+}
+
+func (s *Store) GetSyncRemoteURL(ctx context.Context, nodeID domain.NodeID) (string, error) {
+	var url string
+	err := s.db.QueryRowContext(ctx, `SELECT url FROM sync_remotes WHERE node_id = ?`, nodeID).Scan(&url)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	return url, err
+}
+
+func (s *Store) SetSyncRemote(ctx context.Context, nodeID domain.NodeID, url string) error {
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO sync_remotes (node_id, url) VALUES (?, ?)
+		 ON CONFLICT(node_id) DO UPDATE SET url = excluded.url`,
+		nodeID, url)
+	return err
 }
