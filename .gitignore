@@ -1,0 +1,25 @@
+# Binaries
+/bin/
+dits
+dits-server
+*.exe
+
+# Go
+vendor/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# DITS local data
+.dits/
+
+# Test
+coverage.out
