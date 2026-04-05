@@ -6,201 +6,491 @@ import (
 	"time"
 )
 
-// Reduce takes causally-ordered events and produces a materialized Issue.
+// Reduce takes causally-ordered events and produces a materialized WorkItem.
 // Events MUST be in causal order (use CausalOrder first).
-func Reduce(events []Event) (*Issue, error) {
+func Reduce(events []Event) (*WorkItem, error) {
 	if len(events) == 0 {
 		return nil, fmt.Errorf("no events to reduce")
 	}
 
-	issue := &Issue{
-		Labels:      []string{},
-		Assignees:   []ActorID{},
-		Comments:    []Comment{},
-		Attachments: []Attachment{},
-		Relations:   []Relation{},
+	wi := &WorkItem{
+		Labels:       []string{},
+		Assignees:    []ActorID{},
+		Comments:     []Comment{},
+		Artifacts:    []Artifact{},
+		Relations:    []Relation{},
+		Checkpoints:  []Checkpoint{},
+		Observations: []Observation{},
+		Findings:     []Finding{},
+		Attempts:     []ExecutionAttempt{},
 	}
 
 	for _, e := range events {
-		if err := ApplyEvent(issue, e); err != nil {
+		if err := ApplyEvent(wi, e); err != nil {
 			return nil, fmt.Errorf("applying event %s: %w", e.ID, err)
 		}
 	}
 
-	issue.HeadEvents = Heads(events)
-	issue.EventCount = len(events)
-	return issue, nil
+	wi.HeadEvents = Heads(events)
+	wi.EventCount = len(events)
+	return wi, nil
 }
 
-// ApplyEvent applies a single event to an existing issue state.
-func ApplyEvent(issue *Issue, e Event) error {
+// ApplyEvent applies a single event to an existing work item state.
+func ApplyEvent(wi *WorkItem, e Event) error {
 	switch e.Type {
-	case EventIssueCreated:
-		var p IssueCreatedPayload
+
+	// --- Lifecycle ---
+
+	case EventWorkCreated:
+		var p WorkCreatedPayload
 		if err := json.Unmarshal(e.Payload, &p); err != nil {
 			return err
 		}
-		issue.ID = e.IssueID
-		issue.Title = p.Title
-		issue.Body = p.Body
-		issue.Status = "open"
-		issue.TypeSlug = p.TypeSlug
-		if issue.TypeSlug == "" {
-			issue.TypeSlug = "task"
+		wi.ID = e.WorkItemID
+		wi.Title = p.Title
+		wi.Body = p.Body
+		wi.Kind = p.Kind
+		if wi.Kind == "" {
+			wi.Kind = "task"
 		}
-		issue.Priority = "medium"
-		issue.CreatedBy = e.ActorID
-		issue.CreatedAt = e.Timestamp
-		issue.UpdatedAt = e.Timestamp
+		wi.Status = "open"
+		wi.Priority = "medium"
+		wi.CreatedBy = e.ActorID
+		wi.CreatedAt = e.Timestamp
+		wi.UpdatedAt = e.Timestamp
 
-	case EventIssueTitleSet:
+	case EventWorkTitleSet:
 		var p TitleSetPayload
 		if err := json.Unmarshal(e.Payload, &p); err != nil {
 			return err
 		}
-		issue.Title = p.Title
-		issue.UpdatedAt = maxTime(issue.UpdatedAt, e.Timestamp)
+		wi.Title = p.Title
+		wi.UpdatedAt = maxTime(wi.UpdatedAt, e.Timestamp)
 
-	case EventIssueBodySet:
+	case EventWorkBodySet:
 		var p BodySetPayload
 		if err := json.Unmarshal(e.Payload, &p); err != nil {
 			return err
 		}
-		issue.Body = p.Body
-		issue.UpdatedAt = maxTime(issue.UpdatedAt, e.Timestamp)
+		wi.Body = p.Body
+		wi.UpdatedAt = maxTime(wi.UpdatedAt, e.Timestamp)
 
-	case EventIssueStatusSet:
+	case EventWorkStatusSet:
 		var p StatusSetPayload
 		if err := json.Unmarshal(e.Payload, &p); err != nil {
 			return err
 		}
-		issue.Status = p.To
-		issue.UpdatedAt = maxTime(issue.UpdatedAt, e.Timestamp)
+		wi.Status = p.To
+		wi.UpdatedAt = maxTime(wi.UpdatedAt, e.Timestamp)
 
-	case EventIssueLabelAdded:
-		var p LabelPayload
-		if err := json.Unmarshal(e.Payload, &p); err != nil {
-			return err
-		}
-		if !containsString(issue.Labels, p.LabelSlug) {
-			issue.Labels = append(issue.Labels, p.LabelSlug)
-		}
-		issue.UpdatedAt = maxTime(issue.UpdatedAt, e.Timestamp)
-
-	case EventIssueLabelRemoved:
-		var p LabelPayload
-		if err := json.Unmarshal(e.Payload, &p); err != nil {
-			return err
-		}
-		issue.Labels = removeString(issue.Labels, p.LabelSlug)
-		issue.UpdatedAt = maxTime(issue.UpdatedAt, e.Timestamp)
-
-	case EventIssueAssigned:
-		var p AssignPayload
-		if err := json.Unmarshal(e.Payload, &p); err != nil {
-			return err
-		}
-		if !containsActor(issue.Assignees, p.Assignee) {
-			issue.Assignees = append(issue.Assignees, p.Assignee)
-		}
-		issue.UpdatedAt = maxTime(issue.UpdatedAt, e.Timestamp)
-
-	case EventIssueUnassigned:
-		var p AssignPayload
-		if err := json.Unmarshal(e.Payload, &p); err != nil {
-			return err
-		}
-		issue.Assignees = removeActor(issue.Assignees, p.Assignee)
-		issue.UpdatedAt = maxTime(issue.UpdatedAt, e.Timestamp)
-
-	case EventIssueCommented:
-		var p CommentPayload
-		if err := json.Unmarshal(e.Payload, &p); err != nil {
-			return err
-		}
-		issue.Comments = append(issue.Comments, Comment{
-			EventID:   e.ID,
-			ActorID:   e.ActorID,
-			Body:      p.Body,
-			Timestamp: e.Timestamp,
-		})
-		issue.UpdatedAt = maxTime(issue.UpdatedAt, e.Timestamp)
-
-	case EventIssuePrioritySet:
+	case EventWorkPrioritySet:
 		var p PrioritySetPayload
 		if err := json.Unmarshal(e.Payload, &p); err != nil {
 			return err
 		}
-		issue.Priority = p.Priority
-		issue.UpdatedAt = maxTime(issue.UpdatedAt, e.Timestamp)
+		wi.Priority = p.Priority
+		wi.UpdatedAt = maxTime(wi.UpdatedAt, e.Timestamp)
 
-	case EventIssueClosed:
-		issue.Status = "closed"
+	case EventWorkLabelAdded:
+		var p LabelPayload
+		if err := json.Unmarshal(e.Payload, &p); err != nil {
+			return err
+		}
+		if !containsString(wi.Labels, p.LabelSlug) {
+			wi.Labels = append(wi.Labels, p.LabelSlug)
+		}
+		wi.UpdatedAt = maxTime(wi.UpdatedAt, e.Timestamp)
+
+	case EventWorkLabelRemoved:
+		var p LabelPayload
+		if err := json.Unmarshal(e.Payload, &p); err != nil {
+			return err
+		}
+		wi.Labels = removeString(wi.Labels, p.LabelSlug)
+		wi.UpdatedAt = maxTime(wi.UpdatedAt, e.Timestamp)
+
+	case EventWorkAssigned:
+		var p AssignPayload
+		if err := json.Unmarshal(e.Payload, &p); err != nil {
+			return err
+		}
+		if !containsActor(wi.Assignees, p.Assignee) {
+			wi.Assignees = append(wi.Assignees, p.Assignee)
+		}
+		wi.UpdatedAt = maxTime(wi.UpdatedAt, e.Timestamp)
+
+	case EventWorkUnassigned:
+		var p AssignPayload
+		if err := json.Unmarshal(e.Payload, &p); err != nil {
+			return err
+		}
+		wi.Assignees = removeActor(wi.Assignees, p.Assignee)
+		wi.UpdatedAt = maxTime(wi.UpdatedAt, e.Timestamp)
+
+	case EventWorkCommented:
+		var p CommentPayload
+		if err := json.Unmarshal(e.Payload, &p); err != nil {
+			return err
+		}
+		wi.Comments = append(wi.Comments, Comment{
+			EventID:    e.ID,
+			ActorID:    e.ActorID,
+			Body:       p.Body,
+			ProducedBy: p.ProducedBy,
+			Timestamp:  e.Timestamp,
+		})
+		wi.UpdatedAt = maxTime(wi.UpdatedAt, e.Timestamp)
+
+	case EventWorkClosed:
+		var p ClosedPayload
+		if err := json.Unmarshal(e.Payload, &p); err != nil {
+			return err
+		}
+		wi.Status = "closed"
 		t := e.Timestamp
-		issue.ClosedAt = &t
-		issue.UpdatedAt = maxTime(issue.UpdatedAt, e.Timestamp)
+		wi.ClosedAt = &t
+		wi.UpdatedAt = maxTime(wi.UpdatedAt, e.Timestamp)
 
-	case EventIssueReopened:
-		issue.Status = "open"
-		issue.ClosedAt = nil
-		issue.UpdatedAt = maxTime(issue.UpdatedAt, e.Timestamp)
+	case EventWorkReopened:
+		wi.Status = "open"
+		wi.ClosedAt = nil
+		wi.UpdatedAt = maxTime(wi.UpdatedAt, e.Timestamp)
 
-	case EventSharedIDAssigned:
+	case EventWorkSharedIDAssigned:
 		var p SharedIDAssignedPayload
 		if err := json.Unmarshal(e.Payload, &p); err != nil {
 			return err
 		}
-		issue.SharedID = p.SharedID
-		issue.UpdatedAt = maxTime(issue.UpdatedAt, e.Timestamp)
+		wi.SharedID = p.SharedID
+		wi.UpdatedAt = maxTime(wi.UpdatedAt, e.Timestamp)
 
-	case EventAttachmentAdded:
-		var p AttachmentAddedPayload
+	// --- Execution / Ownership ---
+
+	case EventWorkLeased:
+		var p LeasedPayload
 		if err := json.Unmarshal(e.Payload, &p); err != nil {
 			return err
 		}
-		if !containsAttachment(issue.Attachments, p.AttachmentID) {
-			issue.Attachments = append(issue.Attachments, Attachment{
-				ID:          p.AttachmentID,
-				ContentHash: p.ContentHash,
-				Filename:    p.Filename,
-				MimeType:    p.MimeType,
-				SizeBytes:   p.SizeBytes,
-				AddedBy:     e.ActorID,
-				AddedAt:     e.Timestamp,
+		holder := e.ActorID
+		wi.LeaseHolder = &holder
+		wi.LeaseExpiresAt = &p.LeaseExpiresAt
+		wi.UpdatedAt = maxTime(wi.UpdatedAt, e.Timestamp)
+
+	case EventWorkLeaseReleased:
+		var p LeaseReleasedPayload
+		if err := json.Unmarshal(e.Payload, &p); err != nil {
+			return err
+		}
+		wi.LeaseHolder = nil
+		wi.LeaseExpiresAt = nil
+		wi.UpdatedAt = maxTime(wi.UpdatedAt, e.Timestamp)
+
+	case EventWorkLeaseRenewed:
+		var p LeaseRenewedPayload
+		if err := json.Unmarshal(e.Payload, &p); err != nil {
+			return err
+		}
+		wi.LeaseExpiresAt = &p.LeaseExpiresAt
+		wi.UpdatedAt = maxTime(wi.UpdatedAt, e.Timestamp)
+
+	case EventWorkExecutionStarted:
+		var p ExecutionStartedPayload
+		if err := json.Unmarshal(e.Payload, &p); err != nil {
+			return err
+		}
+		attempt := ExecutionAttempt{
+			AttemptID: p.AttemptID,
+			Number:    p.AttemptNumber,
+			ActorID:   e.ActorID,
+			StartedAt: e.Timestamp,
+			Status:    "running",
+		}
+		wi.Attempts = append(wi.Attempts, attempt)
+		wi.CurrentAttempt = &p.AttemptID
+		wi.UpdatedAt = maxTime(wi.UpdatedAt, e.Timestamp)
+
+	case EventWorkExecutionCompleted:
+		var p ExecutionCompletedPayload
+		if err := json.Unmarshal(e.Payload, &p); err != nil {
+			return err
+		}
+		if a := findAttempt(wi.Attempts, p.AttemptID); a != nil {
+			t := e.Timestamp
+			a.CompletedAt = &t
+			a.Status = "completed"
+		}
+		wi.UpdatedAt = maxTime(wi.UpdatedAt, e.Timestamp)
+
+	case EventWorkExecutionFailed:
+		var p ExecutionFailedPayload
+		if err := json.Unmarshal(e.Payload, &p); err != nil {
+			return err
+		}
+		if a := findAttempt(wi.Attempts, p.AttemptID); a != nil {
+			t := e.Timestamp
+			a.CompletedAt = &t
+			a.Status = "failed"
+		}
+		wi.UpdatedAt = maxTime(wi.UpdatedAt, e.Timestamp)
+
+	case EventWorkExecutionAbandoned:
+		var p ExecutionAbandonedPayload
+		if err := json.Unmarshal(e.Payload, &p); err != nil {
+			return err
+		}
+		if a := findAttempt(wi.Attempts, p.AttemptID); a != nil {
+			t := e.Timestamp
+			a.CompletedAt = &t
+			a.Status = "abandoned"
+		}
+		wi.UpdatedAt = maxTime(wi.UpdatedAt, e.Timestamp)
+
+	// --- Checkpoint / Progress ---
+
+	case EventWorkCheckpointed:
+		var p CheckpointedPayload
+		if err := json.Unmarshal(e.Payload, &p); err != nil {
+			return err
+		}
+		cp := Checkpoint{
+			EventID:   e.ID,
+			AttemptID: p.AttemptID,
+			Summary:   p.Summary,
+			Progress:  p.Progress,
+			NextStep:  p.NextStep,
+			Data:      p.Data,
+			Timestamp: e.Timestamp,
+		}
+		wi.Checkpoints = append(wi.Checkpoints, cp)
+		if a := findAttempt(wi.Attempts, p.AttemptID); a != nil {
+			eid := e.ID
+			a.LastCheckpoint = &eid
+		}
+		wi.UpdatedAt = maxTime(wi.UpdatedAt, e.Timestamp)
+
+	case EventWorkProgressReported:
+		// Streaming event — not materialized as sub-entity.
+		var p ProgressReportedPayload
+		if err := json.Unmarshal(e.Payload, &p); err != nil {
+			return err
+		}
+		wi.UpdatedAt = maxTime(wi.UpdatedAt, e.Timestamp)
+
+	case EventWorkBlocked:
+		var p BlockedPayload
+		if err := json.Unmarshal(e.Payload, &p); err != nil {
+			return err
+		}
+		wi.Blocked = true
+		wi.BlockedReason = p.Reason
+		wi.UpdatedAt = maxTime(wi.UpdatedAt, e.Timestamp)
+
+	case EventWorkUnblocked:
+		var p UnblockedPayload
+		if err := json.Unmarshal(e.Payload, &p); err != nil {
+			return err
+		}
+		wi.Blocked = false
+		wi.BlockedReason = ""
+		wi.UpdatedAt = maxTime(wi.UpdatedAt, e.Timestamp)
+
+	// --- Evidence / Observation ---
+
+	case EventWorkObservationRecorded:
+		var p ObservationRecordedPayload
+		if err := json.Unmarshal(e.Payload, &p); err != nil {
+			return err
+		}
+		wi.Observations = append(wi.Observations, Observation{
+			EventID:    e.ID,
+			Summary:    p.Summary,
+			Data:       p.Data,
+			ProducedBy: p.ProducedBy,
+			Timestamp:  e.Timestamp,
+		})
+		wi.UpdatedAt = maxTime(wi.UpdatedAt, e.Timestamp)
+
+	case EventWorkEvidenceAttached:
+		var p EvidenceAttachedPayload
+		if err := json.Unmarshal(e.Payload, &p); err != nil {
+			return err
+		}
+		if !containsArtifact(wi.Artifacts, p.ArtifactID) {
+			wi.Artifacts = append(wi.Artifacts, Artifact{
+				ID:           p.ArtifactID,
+				ContentHash:  p.ContentHash,
+				Filename:     p.Filename,
+				MimeType:     p.MimeType,
+				SizeBytes:    p.SizeBytes,
+				ArtifactType: p.ArtifactType,
+				SemanticRole: p.SemanticRole,
+				ProducedBy:   p.ProducedBy,
+				AddedBy:      e.ActorID,
+				AddedAt:      e.Timestamp,
 			})
 		}
-		issue.UpdatedAt = maxTime(issue.UpdatedAt, e.Timestamp)
+		wi.UpdatedAt = maxTime(wi.UpdatedAt, e.Timestamp)
 
-	case EventAttachmentRemoved:
-		var p AttachmentRemovedPayload
+	case EventWorkFindingRecorded:
+		var p FindingRecordedPayload
 		if err := json.Unmarshal(e.Payload, &p); err != nil {
 			return err
 		}
-		issue.Attachments = removeAttachment(issue.Attachments, p.AttachmentID)
-		issue.UpdatedAt = maxTime(issue.UpdatedAt, e.Timestamp)
+		wi.Findings = append(wi.Findings, Finding{
+			EventID:      e.ID,
+			Statement:    p.Statement,
+			Confidence:   p.Confidence,
+			Source:       p.Source,
+			EvidenceRefs: p.EvidenceRefs,
+			ProducedBy:   p.ProducedBy,
+			Timestamp:    e.Timestamp,
+		})
+		wi.UpdatedAt = maxTime(wi.UpdatedAt, e.Timestamp)
 
-	case EventIssueLinked:
+	case EventWorkFindingRetracted:
+		var p FindingRetractedPayload
+		if err := json.Unmarshal(e.Payload, &p); err != nil {
+			return err
+		}
+		if f := findFindingByEventID(wi.Findings, p.OriginalEventID); f != nil {
+			f.Retracted = true
+		}
+		wi.UpdatedAt = maxTime(wi.UpdatedAt, e.Timestamp)
+
+	// --- Planning / Decision ---
+	// These events are recorded in the DAG but not materialized into sub-entity
+	// collections. They update UpdatedAt only.
+
+	case EventWorkPlanProposed:
+		var p PlanProposedPayload
+		if err := json.Unmarshal(e.Payload, &p); err != nil {
+			return err
+		}
+		wi.UpdatedAt = maxTime(wi.UpdatedAt, e.Timestamp)
+
+	case EventWorkPlanAccepted:
+		var p PlanAcceptedPayload
+		if err := json.Unmarshal(e.Payload, &p); err != nil {
+			return err
+		}
+		wi.UpdatedAt = maxTime(wi.UpdatedAt, e.Timestamp)
+
+	case EventWorkPlanRejected:
+		var p PlanRejectedPayload
+		if err := json.Unmarshal(e.Payload, &p); err != nil {
+			return err
+		}
+		wi.UpdatedAt = maxTime(wi.UpdatedAt, e.Timestamp)
+
+	case EventWorkStepAdded:
+		var p StepAddedPayload
+		if err := json.Unmarshal(e.Payload, &p); err != nil {
+			return err
+		}
+		wi.UpdatedAt = maxTime(wi.UpdatedAt, e.Timestamp)
+
+	case EventWorkDecisionRecorded:
+		var p DecisionRecordedPayload
+		if err := json.Unmarshal(e.Payload, &p); err != nil {
+			return err
+		}
+		wi.UpdatedAt = maxTime(wi.UpdatedAt, e.Timestamp)
+
+	// --- Handoff / Review ---
+	// These events are recorded in the DAG but not materialized into sub-entity
+	// collections. They update UpdatedAt only.
+
+	case EventWorkReviewRequested:
+		var p ReviewRequestedPayload
+		if err := json.Unmarshal(e.Payload, &p); err != nil {
+			return err
+		}
+		wi.UpdatedAt = maxTime(wi.UpdatedAt, e.Timestamp)
+
+	case EventWorkReviewCompleted:
+		var p ReviewCompletedPayload
+		if err := json.Unmarshal(e.Payload, &p); err != nil {
+			return err
+		}
+		wi.UpdatedAt = maxTime(wi.UpdatedAt, e.Timestamp)
+
+	case EventWorkHandedOff:
+		var p HandedOffPayload
+		if err := json.Unmarshal(e.Payload, &p); err != nil {
+			return err
+		}
+		wi.UpdatedAt = maxTime(wi.UpdatedAt, e.Timestamp)
+
+	case EventWorkHandoffAccepted:
+		var p HandoffAcceptedPayload
+		if err := json.Unmarshal(e.Payload, &p); err != nil {
+			return err
+		}
+		wi.UpdatedAt = maxTime(wi.UpdatedAt, e.Timestamp)
+
+	case EventWorkHandoffRejected:
+		var p HandoffRejectedPayload
+		if err := json.Unmarshal(e.Payload, &p); err != nil {
+			return err
+		}
+		wi.UpdatedAt = maxTime(wi.UpdatedAt, e.Timestamp)
+
+	// --- Relation / Artifact ---
+
+	case EventWorkLinked:
 		var p RelationPayload
 		if err := json.Unmarshal(e.Payload, &p); err != nil {
 			return err
 		}
-		rel := Relation{Type: p.RelationType, TargetIssue: p.TargetIssue}
-		if !containsRelation(issue.Relations, rel) {
-			issue.Relations = append(issue.Relations, rel)
+		rel := Relation{Type: p.RelationType, TargetWorkItem: p.TargetWorkItem}
+		if !containsRelation(wi.Relations, rel) {
+			wi.Relations = append(wi.Relations, rel)
 		}
-		issue.UpdatedAt = maxTime(issue.UpdatedAt, e.Timestamp)
+		wi.UpdatedAt = maxTime(wi.UpdatedAt, e.Timestamp)
 
-	case EventIssueUnlinked:
+	case EventWorkUnlinked:
 		var p RelationPayload
 		if err := json.Unmarshal(e.Payload, &p); err != nil {
 			return err
 		}
-		issue.Relations = removeRelation(issue.Relations, Relation{Type: p.RelationType, TargetIssue: p.TargetIssue})
-		issue.UpdatedAt = maxTime(issue.UpdatedAt, e.Timestamp)
+		wi.Relations = removeRelation(wi.Relations, Relation{Type: p.RelationType, TargetWorkItem: p.TargetWorkItem})
+		wi.UpdatedAt = maxTime(wi.UpdatedAt, e.Timestamp)
+
+	case EventWorkArtifactAdded:
+		var p ArtifactAddedPayload
+		if err := json.Unmarshal(e.Payload, &p); err != nil {
+			return err
+		}
+		if !containsArtifact(wi.Artifacts, p.ArtifactID) {
+			wi.Artifacts = append(wi.Artifacts, Artifact{
+				ID:           p.ArtifactID,
+				ContentHash:  p.ContentHash,
+				Filename:     p.Filename,
+				MimeType:     p.MimeType,
+				SizeBytes:    p.SizeBytes,
+				ArtifactType: p.ArtifactType,
+				SemanticRole: p.SemanticRole,
+				ProducedBy:   p.ProducedBy,
+				AddedBy:      e.ActorID,
+				AddedAt:      e.Timestamp,
+			})
+		}
+		wi.UpdatedAt = maxTime(wi.UpdatedAt, e.Timestamp)
+
+	case EventWorkArtifactRemoved:
+		var p ArtifactRemovedPayload
+		if err := json.Unmarshal(e.Payload, &p); err != nil {
+			return err
+		}
+		wi.Artifacts = removeArtifact(wi.Artifacts, p.ArtifactID)
+		wi.UpdatedAt = maxTime(wi.UpdatedAt, e.Timestamp)
 	}
 
 	return nil
 }
+
+// --- Helpers ---
 
 func maxTime(a, b time.Time) time.Time {
 	if b.After(a) {
@@ -247,7 +537,7 @@ func removeActor(s []ActorID, v ActorID) []ActorID {
 	return result
 }
 
-func containsAttachment(s []Attachment, id AttachmentID) bool {
+func containsArtifact(s []Artifact, id ArtifactID) bool {
 	for _, x := range s {
 		if x.ID == id {
 			return true
@@ -256,8 +546,8 @@ func containsAttachment(s []Attachment, id AttachmentID) bool {
 	return false
 }
 
-func removeAttachment(s []Attachment, id AttachmentID) []Attachment {
-	result := make([]Attachment, 0, len(s))
+func removeArtifact(s []Artifact, id ArtifactID) []Artifact {
+	result := make([]Artifact, 0, len(s))
 	for _, x := range s {
 		if x.ID != id {
 			result = append(result, x)
@@ -268,7 +558,7 @@ func removeAttachment(s []Attachment, id AttachmentID) []Attachment {
 
 func containsRelation(s []Relation, r Relation) bool {
 	for _, x := range s {
-		if x.Type == r.Type && x.TargetIssue == r.TargetIssue {
+		if x.Type == r.Type && x.TargetWorkItem == r.TargetWorkItem {
 			return true
 		}
 	}
@@ -278,9 +568,27 @@ func containsRelation(s []Relation, r Relation) bool {
 func removeRelation(s []Relation, r Relation) []Relation {
 	result := make([]Relation, 0, len(s))
 	for _, x := range s {
-		if !(x.Type == r.Type && x.TargetIssue == r.TargetIssue) {
+		if !(x.Type == r.Type && x.TargetWorkItem == r.TargetWorkItem) {
 			result = append(result, x)
 		}
 	}
 	return result
+}
+
+func findAttempt(attempts []ExecutionAttempt, id AttemptID) *ExecutionAttempt {
+	for i := range attempts {
+		if attempts[i].AttemptID == id {
+			return &attempts[i]
+		}
+	}
+	return nil
+}
+
+func findFindingByEventID(findings []Finding, eventID EventID) *Finding {
+	for i := range findings {
+		if findings[i].EventID == eventID {
+			return &findings[i]
+		}
+	}
+	return nil
 }

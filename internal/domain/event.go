@@ -7,44 +7,104 @@ import (
 
 type EventType string
 
+// --- Lifecycle Events ---
+
 const (
-	EventIssueCreated      EventType = "issue.created"
-	EventIssueTitleSet     EventType = "issue.title_set"
-	EventIssueBodySet      EventType = "issue.body_set"
-	EventIssueStatusSet    EventType = "issue.status_set"
-	EventIssueLabelAdded   EventType = "issue.label_added"
-	EventIssueLabelRemoved EventType = "issue.label_removed"
-	EventIssueAssigned     EventType = "issue.assigned"
-	EventIssueUnassigned   EventType = "issue.unassigned"
-	EventIssueCommented    EventType = "issue.commented"
-	EventIssuePrioritySet  EventType = "issue.priority_set"
-	EventIssueClosed       EventType = "issue.closed"
-	EventIssueReopened     EventType = "issue.reopened"
-	EventSharedIDAssigned    EventType = "issue.shared_id_assigned"
-	EventAttachmentAdded   EventType = "issue.attachment_added"
-	EventAttachmentRemoved EventType = "issue.attachment_removed"
-	EventIssueLinked       EventType = "issue.linked"
-	EventIssueUnlinked     EventType = "issue.unlinked"
+	EventWorkCreated         EventType = "work.created"
+	EventWorkTitleSet        EventType = "work.title_set"
+	EventWorkBodySet         EventType = "work.body_set"
+	EventWorkStatusSet       EventType = "work.status_set"
+	EventWorkPrioritySet     EventType = "work.priority_set"
+	EventWorkLabelAdded      EventType = "work.label_added"
+	EventWorkLabelRemoved    EventType = "work.label_removed"
+	EventWorkAssigned        EventType = "work.assigned"
+	EventWorkUnassigned      EventType = "work.unassigned"
+	EventWorkCommented       EventType = "work.commented"
+	EventWorkClosed          EventType = "work.closed"
+	EventWorkReopened        EventType = "work.reopened"
+	EventWorkSharedIDAssigned EventType = "work.shared_id_assigned"
 )
 
+// --- Execution / Ownership Events ---
+
+const (
+	EventWorkLeased             EventType = "work.leased"
+	EventWorkLeaseReleased      EventType = "work.lease_released"
+	EventWorkLeaseRenewed       EventType = "work.lease_renewed"
+	EventWorkExecutionStarted   EventType = "work.execution_started"
+	EventWorkExecutionCompleted EventType = "work.execution_completed"
+	EventWorkExecutionFailed    EventType = "work.execution_failed"
+	EventWorkExecutionAbandoned EventType = "work.execution_abandoned"
+)
+
+// --- Checkpoint / Progress Events ---
+
+const (
+	EventWorkCheckpointed     EventType = "work.checkpointed"
+	EventWorkProgressReported EventType = "work.progress_reported"
+	EventWorkBlocked          EventType = "work.blocked"
+	EventWorkUnblocked        EventType = "work.unblocked"
+)
+
+// --- Evidence / Observation Events ---
+
+const (
+	EventWorkObservationRecorded EventType = "work.observation_recorded"
+	EventWorkEvidenceAttached    EventType = "work.evidence_attached"
+	EventWorkFindingRecorded     EventType = "work.finding_recorded"
+	EventWorkFindingRetracted    EventType = "work.finding_retracted"
+)
+
+// --- Planning / Decision Events ---
+
+const (
+	EventWorkPlanProposed     EventType = "work.plan_proposed"
+	EventWorkPlanAccepted     EventType = "work.plan_accepted"
+	EventWorkPlanRejected     EventType = "work.plan_rejected"
+	EventWorkStepAdded        EventType = "work.step_added"
+	EventWorkDecisionRecorded EventType = "work.decision_recorded"
+)
+
+// --- Handoff / Review Events ---
+
+const (
+	EventWorkReviewRequested  EventType = "work.review_requested"
+	EventWorkReviewCompleted  EventType = "work.review_completed"
+	EventWorkHandedOff        EventType = "work.handed_off"
+	EventWorkHandoffAccepted  EventType = "work.handoff_accepted"
+	EventWorkHandoffRejected  EventType = "work.handoff_rejected"
+)
+
+// --- Relation / Artifact Events ---
+
+const (
+	EventWorkLinked          EventType = "work.linked"
+	EventWorkUnlinked        EventType = "work.unlinked"
+	EventWorkArtifactAdded   EventType = "work.artifact_added"
+	EventWorkArtifactRemoved EventType = "work.artifact_removed"
+)
+
+// Event is an immutable record of a state change in the system.
 type Event struct {
 	ID             EventID         `json:"id"`
-	IssueID        CanonicalID     `json:"issue_id"`
+	WorkItemID     WorkItemID      `json:"work_item_id"`
 	Type           EventType       `json:"type"`
 	ParentEventIDs []EventID       `json:"parent_event_ids"`
 	MetaVersion    MetaVersion     `json:"meta_version"`
 	ActorID        ActorID         `json:"actor_id"`
 	Timestamp      time.Time       `json:"timestamp"`
 	Payload        json.RawMessage `json:"payload"`
+	EmittedBy      *EmittedBy      `json:"emitted_by,omitempty"`
 	Signature      []byte          `json:"signature,omitempty"`
 }
 
-// Typed payloads for each event type.
+// --- Lifecycle Payloads ---
 
-type IssueCreatedPayload struct {
-	Title    string `json:"title"`
-	Body     string `json:"body,omitempty"`
-	TypeSlug string `json:"type_slug,omitempty"`
+type WorkCreatedPayload struct {
+	Title     string `json:"title"`
+	Body      string `json:"body,omitempty"`
+	Kind      string `json:"kind"`
+	SchemaRef string `json:"schema_ref,omitempty"`
 }
 
 type TitleSetPayload struct {
@@ -60,6 +120,10 @@ type StatusSetPayload struct {
 	To   string `json:"to"`
 }
 
+type PrioritySetPayload struct {
+	Priority string `json:"priority"`
+}
+
 type LabelPayload struct {
 	LabelSlug string `json:"label_slug"`
 }
@@ -69,32 +133,204 @@ type AssignPayload struct {
 }
 
 type CommentPayload struct {
-	Body string `json:"body"`
+	Body       string      `json:"body"`
+	ProducedBy *ProducedBy `json:"produced_by,omitempty"`
 }
 
-type PrioritySetPayload struct {
-	Priority string `json:"priority"`
+type ClosedPayload struct {
+	Reason string `json:"reason,omitempty"`
 }
 
 type SharedIDAssignedPayload struct {
 	SharedID SharedID `json:"shared_id"`
 }
 
-type AttachmentAddedPayload struct {
-	AttachmentID AttachmentID `json:"attachment_id"`
-	ContentHash  string       `json:"content_hash"`
-	Filename     string       `json:"filename"`
-	MimeType     string       `json:"mime_type"`
-	SizeBytes    int64        `json:"size_bytes"`
+// --- Execution / Ownership Payloads ---
+
+type LeasedPayload struct {
+	LeaseID          LeaseID   `json:"lease_id"`
+	LeaseDurationSec int       `json:"lease_duration_secs"`
+	LeaseExpiresAt   time.Time `json:"lease_expires_at"`
+	Generation       uint64    `json:"generation"`
 }
 
-type AttachmentRemovedPayload struct {
-	AttachmentID AttachmentID `json:"attachment_id"`
+type LeaseReleasedPayload struct {
+	LeaseID LeaseID `json:"lease_id"`
+	Reason  string  `json:"reason"`
 }
+
+type LeaseRenewedPayload struct {
+	LeaseID        LeaseID   `json:"lease_id"`
+	LeaseExpiresAt time.Time `json:"lease_expires_at"`
+	Generation     uint64    `json:"generation"`
+}
+
+type ExecutionStartedPayload struct {
+	AttemptID     AttemptID `json:"attempt_id"`
+	AttemptNumber uint32    `json:"attempt_number"`
+	PlanRef       string    `json:"plan_ref,omitempty"`
+}
+
+type ExecutionCompletedPayload struct {
+	AttemptID          AttemptID `json:"attempt_id"`
+	Summary            string    `json:"summary"`
+	OutputArtifactRefs []string  `json:"output_artifact_refs,omitempty"`
+}
+
+type ExecutionFailedPayload struct {
+	AttemptID          AttemptID `json:"attempt_id"`
+	Error              string    `json:"error"`
+	Retryable          bool      `json:"retryable"`
+	OutputArtifactRefs []string  `json:"output_artifact_refs,omitempty"`
+}
+
+type ExecutionAbandonedPayload struct {
+	AttemptID AttemptID `json:"attempt_id"`
+	Reason    string    `json:"reason"`
+}
+
+// --- Checkpoint / Progress Payloads ---
+
+type CheckpointedPayload struct {
+	AttemptID AttemptID       `json:"attempt_id"`
+	Summary   string          `json:"summary"`
+	Progress  float64         `json:"progress"`
+	NextStep  string          `json:"next_step,omitempty"`
+	Data      json.RawMessage `json:"data,omitempty"`
+}
+
+type ProgressReportedPayload struct {
+	AttemptID AttemptID `json:"attempt_id"`
+	Progress  float64   `json:"progress"`
+	Message   string    `json:"message"`
+}
+
+type BlockedPayload struct {
+	Reason       string `json:"reason"`
+	BlockedByRef string `json:"blocked_by_ref,omitempty"`
+}
+
+type UnblockedPayload struct {
+	Reason string `json:"reason"`
+}
+
+// --- Evidence / Observation Payloads ---
+
+type ObservationRecordedPayload struct {
+	Summary    string          `json:"summary"`
+	Data       json.RawMessage `json:"data,omitempty"`
+	ProducedBy *ProducedBy     `json:"produced_by,omitempty"`
+}
+
+type EvidenceAttachedPayload struct {
+	ArtifactID   ArtifactID  `json:"artifact_id"`
+	ContentHash  string      `json:"content_hash"`
+	Filename     string      `json:"filename"`
+	MimeType     string      `json:"mime_type"`
+	SizeBytes    int64       `json:"size_bytes"`
+	ArtifactType string      `json:"artifact_type"`
+	SemanticRole string      `json:"semantic_role"`
+	ProducedBy   *ProducedBy `json:"produced_by,omitempty"`
+}
+
+type FindingRecordedPayload struct {
+	Statement    string      `json:"statement"`
+	Confidence   float64     `json:"confidence"`
+	Source       string      `json:"source,omitempty"`
+	EvidenceRefs []string    `json:"evidence_refs,omitempty"`
+	ProducedBy   *ProducedBy `json:"produced_by,omitempty"`
+}
+
+type FindingRetractedPayload struct {
+	OriginalEventID EventID `json:"original_event_id"`
+	Reason          string  `json:"reason"`
+}
+
+// --- Planning / Decision Payloads ---
+
+type PlanProposedPayload struct {
+	Plan       string      `json:"plan"`
+	Summary    string      `json:"summary"`
+	ProducedBy *ProducedBy `json:"produced_by,omitempty"`
+}
+
+type PlanAcceptedPayload struct {
+	PlanEventID EventID `json:"plan_event_id"`
+	Comment     string  `json:"comment,omitempty"`
+}
+
+type PlanRejectedPayload struct {
+	PlanEventID EventID `json:"plan_event_id"`
+	Reason      string  `json:"reason"`
+}
+
+type StepAddedPayload struct {
+	StepIndex   int      `json:"step_index"`
+	Description string   `json:"description"`
+	DependsOn   []string `json:"depends_on,omitempty"`
+}
+
+type DecisionRecordedPayload struct {
+	Decision     string      `json:"decision"`
+	Rationale    string      `json:"rationale"`
+	Alternatives []string    `json:"alternatives,omitempty"`
+	ProducedBy   *ProducedBy `json:"produced_by,omitempty"`
+}
+
+// --- Handoff / Review Payloads ---
+
+type ReviewRequestedPayload struct {
+	ReviewID     ReviewID `json:"review_id"`
+	Reviewer     ActorID  `json:"reviewer,omitempty"`
+	Scope        string   `json:"scope"`
+	ArtifactRefs []string `json:"artifact_refs,omitempty"`
+}
+
+type ReviewCompletedPayload struct {
+	ReviewID   ReviewID    `json:"review_id"`
+	Verdict    string      `json:"verdict"` // approve, request_changes, reject
+	Comment    string      `json:"comment,omitempty"`
+	ProducedBy *ProducedBy `json:"produced_by,omitempty"`
+}
+
+type HandedOffPayload struct {
+	HandoffID    HandoffID `json:"handoff_id"`
+	From         ActorID   `json:"from"`
+	To           ActorID   `json:"to"`
+	Context      string    `json:"context"`
+	ArtifactRefs []string  `json:"artifact_refs,omitempty"`
+}
+
+type HandoffAcceptedPayload struct {
+	HandoffID HandoffID `json:"handoff_id"`
+	Comment   string    `json:"comment,omitempty"`
+}
+
+type HandoffRejectedPayload struct {
+	HandoffID HandoffID `json:"handoff_id"`
+	Reason    string    `json:"reason"`
+}
+
+// --- Relation / Artifact Payloads ---
 
 type RelationPayload struct {
-	RelationType string      `json:"relation_type"` // e.g. "blocks", "relates_to", "duplicates"
-	TargetIssue  CanonicalID `json:"target_issue"`
+	RelationType   string     `json:"relation_type"`
+	TargetWorkItem WorkItemID `json:"target_work_item"`
+}
+
+type ArtifactAddedPayload struct {
+	ArtifactID   ArtifactID  `json:"artifact_id"`
+	ContentHash  string      `json:"content_hash"`
+	Filename     string      `json:"filename"`
+	MimeType     string      `json:"mime_type"`
+	SizeBytes    int64       `json:"size_bytes"`
+	ArtifactType string      `json:"artifact_type,omitempty"`
+	SemanticRole string      `json:"semantic_role,omitempty"`
+	ProducedBy   *ProducedBy `json:"produced_by,omitempty"`
+}
+
+type ArtifactRemovedPayload struct {
+	ArtifactID ArtifactID `json:"artifact_id"`
 }
 
 // MustMarshalPayload marshals a payload to JSON, panicking on error.

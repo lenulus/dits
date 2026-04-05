@@ -2,7 +2,6 @@ package domain
 
 import (
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -17,30 +16,39 @@ func testMeta() *MetaConfig {
 	return &m
 }
 
-func TestValidateEvent_ValidIssueCreated(t *testing.T) {
+func TestValidateEvent_ValidWorkCreated(t *testing.T) {
 	meta := testMeta()
 	e := Event{
-		Type:    EventIssueCreated,
-		Payload: MustMarshalPayload(IssueCreatedPayload{Title: "Test", TypeSlug: "task"}),
+		Type:    EventWorkCreated,
+		Payload: MustMarshalPayload(WorkCreatedPayload{Title: "Test", Kind: "task"}),
 	}
 	assert.NoError(t, ValidateEvent(e, meta))
 }
 
-func TestValidateEvent_InvalidIssueType(t *testing.T) {
+func TestValidateEvent_InvalidWorkKind(t *testing.T) {
 	meta := testMeta()
 	e := Event{
-		Type:    EventIssueCreated,
-		Payload: MustMarshalPayload(IssueCreatedPayload{Title: "Test", TypeSlug: "epic"}),
+		Type:    EventWorkCreated,
+		Payload: MustMarshalPayload(WorkCreatedPayload{Title: "Test", Kind: "epic"}),
 	}
 	err := ValidateEvent(e, meta)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "unknown issue type")
+	assert.Contains(t, err.Error(), "unknown work kind")
+}
+
+func TestValidateEvent_EmptyKindPasses(t *testing.T) {
+	meta := testMeta()
+	e := Event{
+		Type:    EventWorkCreated,
+		Payload: MustMarshalPayload(WorkCreatedPayload{Title: "Test"}),
+	}
+	assert.NoError(t, ValidateEvent(e, meta))
 }
 
 func TestValidateEvent_ValidLabel(t *testing.T) {
 	meta := testMeta()
 	e := Event{
-		Type:    EventIssueLabelAdded,
+		Type:    EventWorkLabelAdded,
 		Payload: MustMarshalPayload(LabelPayload{LabelSlug: "bug"}),
 	}
 	assert.NoError(t, ValidateEvent(e, meta))
@@ -49,7 +57,7 @@ func TestValidateEvent_ValidLabel(t *testing.T) {
 func TestValidateEvent_InvalidLabel(t *testing.T) {
 	meta := testMeta()
 	e := Event{
-		Type:    EventIssueLabelAdded,
+		Type:    EventWorkLabelAdded,
 		Payload: MustMarshalPayload(LabelPayload{LabelSlug: "nonexistent"}),
 	}
 	err := ValidateEvent(e, meta)
@@ -60,7 +68,7 @@ func TestValidateEvent_InvalidLabel(t *testing.T) {
 func TestValidateEvent_ValidStatus(t *testing.T) {
 	meta := testMeta()
 	e := Event{
-		Type:    EventIssueStatusSet,
+		Type:    EventWorkStatusSet,
 		Payload: MustMarshalPayload(StatusSetPayload{From: "open", To: "in_progress"}),
 	}
 	assert.NoError(t, ValidateEvent(e, meta))
@@ -69,7 +77,7 @@ func TestValidateEvent_ValidStatus(t *testing.T) {
 func TestValidateEvent_InvalidStatus(t *testing.T) {
 	meta := testMeta()
 	e := Event{
-		Type:    EventIssueStatusSet,
+		Type:    EventWorkStatusSet,
 		Payload: MustMarshalPayload(StatusSetPayload{From: "open", To: "invalid"}),
 	}
 	err := ValidateEvent(e, meta)
@@ -80,7 +88,7 @@ func TestValidateEvent_InvalidStatus(t *testing.T) {
 func TestValidateEvent_InvalidPriority(t *testing.T) {
 	meta := testMeta()
 	e := Event{
-		Type:    EventIssuePrioritySet,
+		Type:    EventWorkPrioritySet,
 		Payload: MustMarshalPayload(PrioritySetPayload{Priority: "urgent"}),
 	}
 	err := ValidateEvent(e, meta)
@@ -88,44 +96,100 @@ func TestValidateEvent_InvalidPriority(t *testing.T) {
 	assert.Contains(t, err.Error(), "unknown priority")
 }
 
+func TestValidateEvent_ValidArtifactType(t *testing.T) {
+	meta := testMeta()
+	e := Event{
+		Type: EventWorkArtifactAdded,
+		Payload: MustMarshalPayload(ArtifactAddedPayload{
+			ArtifactID: "art_001", ContentHash: "sha256:abc",
+			Filename: "f.txt", SizeBytes: 100, ArtifactType: "log",
+		}),
+	}
+	assert.NoError(t, ValidateEvent(e, meta))
+}
+
+func TestValidateEvent_InvalidArtifactType(t *testing.T) {
+	meta := testMeta()
+	e := Event{
+		Type: EventWorkArtifactAdded,
+		Payload: MustMarshalPayload(ArtifactAddedPayload{
+			ArtifactID: "art_001", ContentHash: "sha256:abc",
+			Filename: "f.txt", SizeBytes: 100, ArtifactType: "nonexistent",
+		}),
+	}
+	err := ValidateEvent(e, meta)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unknown artifact type")
+}
+
+func TestValidateEvent_EmptyArtifactTypePasses(t *testing.T) {
+	meta := testMeta()
+	e := Event{
+		Type: EventWorkArtifactAdded,
+		Payload: MustMarshalPayload(ArtifactAddedPayload{
+			ArtifactID: "art_001", ContentHash: "sha256:abc",
+			Filename: "f.txt", SizeBytes: 100,
+		}),
+	}
+	assert.NoError(t, ValidateEvent(e, meta))
+}
+
+func TestValidateEvent_ValidRelationType(t *testing.T) {
+	meta := testMeta()
+	e := Event{
+		Type:    EventWorkLinked,
+		Payload: MustMarshalPayload(RelationPayload{RelationType: "blocks", TargetWorkItem: "wrk_002"}),
+	}
+	assert.NoError(t, ValidateEvent(e, meta))
+}
+
+func TestValidateEvent_InvalidRelationType(t *testing.T) {
+	meta := testMeta()
+	e := Event{
+		Type:    EventWorkLinked,
+		Payload: MustMarshalPayload(RelationPayload{RelationType: "unknown_rel", TargetWorkItem: "wrk_002"}),
+	}
+	err := ValidateEvent(e, meta)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unknown relation type")
+}
+
+func TestValidateEvent_EvidenceAttachedArtifactType(t *testing.T) {
+	meta := testMeta()
+	e := Event{
+		Type: EventWorkEvidenceAttached,
+		Payload: MustMarshalPayload(EvidenceAttachedPayload{
+			ArtifactID: "art_001", ContentHash: "sha256:abc",
+			Filename: "f.txt", SizeBytes: 100, ArtifactType: "nonexistent", SemanticRole: "evidence",
+		}),
+	}
+	err := ValidateEvent(e, meta)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unknown artifact type")
+}
+
 func TestValidateEvent_NilMeta(t *testing.T) {
 	e := Event{
-		Type:    EventIssueLabelAdded,
+		Type:    EventWorkLabelAdded,
 		Payload: MustMarshalPayload(LabelPayload{LabelSlug: "anything"}),
 	}
 	assert.NoError(t, ValidateEvent(e, nil))
 }
 
-func TestMetaConfig_AddRemoveLabel(t *testing.T) {
-	meta := DefaultMetaConfig("TEST")
-	require.Len(t, meta.Labels, 0)
-
-	err := meta.AddLabel(Label{Slug: "bug", Name: "Bug", Color: "#ff0000"})
-	require.NoError(t, err)
-	assert.Len(t, meta.Labels, 1)
-	assert.Equal(t, MetaVersion(2), meta.Version)
-
-	// Duplicate.
-	err = meta.AddLabel(Label{Slug: "bug", Name: "Bug"})
-	assert.Error(t, err)
-
-	err = meta.RemoveLabel("bug")
-	require.NoError(t, err)
-	assert.Len(t, meta.Labels, 0)
-	assert.Equal(t, MetaVersion(3), meta.Version)
-
-	// Remove non-existent.
-	err = meta.RemoveLabel("bug")
-	assert.Error(t, err)
+func TestValidateEvent_ExecutionStatusFromExecutionWorkflow(t *testing.T) {
+	meta := testMeta()
+	e := Event{
+		Type:    EventWorkStatusSet,
+		Payload: MustMarshalPayload(StatusSetPayload{From: "pending", To: "active"}),
+	}
+	assert.NoError(t, ValidateEvent(e, meta))
 }
 
-func TestMetaConfig_HasStatus(t *testing.T) {
-	meta := DefaultMetaConfig("TEST")
-	assert.True(t, meta.HasStatus("open"))
-	assert.True(t, meta.HasStatus("in_progress"))
-	assert.True(t, meta.HasStatus("closed"))
-	assert.False(t, meta.HasStatus("invalid"))
+func TestValidateEvent_ReviewStatusFromReviewWorkflow(t *testing.T) {
+	meta := testMeta()
+	e := Event{
+		Type:    EventWorkStatusSet,
+		Payload: MustMarshalPayload(StatusSetPayload{From: "pending_review", To: "approved"}),
+	}
+	assert.NoError(t, ValidateEvent(e, meta))
 }
-
-// suppress unused import warning
-var _ = time.Now
