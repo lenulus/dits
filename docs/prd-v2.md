@@ -2,7 +2,7 @@
 
 **Status:** Draft
 **Author:** Anthony Laforge
-**Version:** 0.3
+**Version:** 0.4
 **Branch:** v2
 
 ---
@@ -90,7 +90,7 @@ type WorkItem struct {
     Assignees       []ActorID
 
     // Coordination state
-    ClaimedBy       *ActorID
+    LeaseHolder       *ActorID
     LeaseExpiresAt  *time.Time
     CurrentAttempt  *AttemptID
     Blocked         bool
@@ -381,7 +381,7 @@ Leases are a hybrid of events + wall-clock time. The `coordination_leases` table
 ```go
 type Lease struct {
     WorkItemID  WorkItemID
-    ClaimedBy   ActorID
+    LeaseHolder   ActorID
     LeaseID     LeaseID
     Generation  uint64
     ExpiresAt   time.Time
@@ -715,6 +715,7 @@ CLI commands for the new domain, plus full integration testing.
 **Scope:**
 - `dits work create`, `dits work list`, `dits work show`, `dits work lease`, `dits work lease-release`, `dits work checkpoint`, `dits work complete`, `dits work fail`, `dits work review`, `dits work handoff`
 - `dits work observe`, `dits work evidence`, `dits work finding`, `dits work plan`
+- Note: `complete` and `fail` operate on the current execution attempt, not the work item lifecycle. They emit `work.execution_completed` / `work.execution_failed` against the active attempt.
 - `dits issue` as alias for `dits work --kind=issue`
 - E2E test: two agents coordinating via leases and checkpoints through server
 - Documentation updates
@@ -735,12 +736,26 @@ These hold at all times, regardless of event ordering or node topology:
 6. **Operational state is independent of status** — lease, attempt, and blocked state do not imply or require a particular workflow status
 7. **Events are immutable** — no event is ever modified or deleted after creation
 8. **The coordination table is a rebuildable cache** — it can be dropped and reconstructed from events + wall-clock time
-9. **Attempt IDs are globally unique, attempt numbers are monotonic per work item** — attempt 3 always follows attempt 2; no gaps, no reordering
+9. **Attempt IDs are globally unique, attempt numbers are monotonic and unique per work item** — numbering is sequential at the materialized level but the system does not guarantee gap-free assignment under concurrency
 10. **ReviewIDs and HandoffIDs uniquely identify durable sub-entities** — they are not ephemeral references but first-class objects within a work item's history, supporting concurrent reviews and handoffs
 
 ---
 
-## 12. Success Criteria
+## 12. Open Questions
+
+Implementation decisions to resolve during build-out, not design blockers:
+
+1. **Lease acquisition: events-only or server-side CAS?** The current design represents leases purely as events with a materialized coordination table. Under high contention, two clients could both emit `work.leased` events against the same work item before either syncs. The server would then need to reject one during sync. An alternative is a server-side compare-and-set endpoint (`POST /api/v2/work/{id}/lease`) that atomically checks lease state before accepting. Events-only is simpler and consistent with the architecture; CAS is stronger under contention.
+
+2. **Attempt number allocation under concurrency.** If two actors both start an attempt against the same work item concurrently, they may both assign `attempt_number=2`. The reducer must handle this — either by accepting both (with distinct AttemptIDs) or by rejecting based on lease ownership. The invariant says numbers are monotonic and unique per work item at the materialized level, but the allocation mechanism needs to be specified.
+
+3. **Review/handoff acceptance side effects.** When a handoff is accepted, should the system automatically update assignment or create a lease for the accepting actor? Or does acceptance remain purely historical, requiring the acceptor to explicitly lease and start execution? The latter is more composable; the former is more ergonomic.
+
+4. **Blob garbage collection.** When an artifact is removed from a work item, the blob remains in the content-addressed store. When (if ever) are unreferenced blobs cleaned up? Options: never (storage is cheap), manual GC command, reference-counted with periodic sweep. This is a deployment concern, not a protocol concern, but should be documented.
+
+---
+
+## 13. Success Criteria
 
 1. An agent can lease a work item, checkpoint progress 3 times, and complete execution — all recorded as events in the DAG and visible via `dits work show`
 2. Two agents attempting to lease the same work item: one succeeds, the other gets a conflict (lease already held)
