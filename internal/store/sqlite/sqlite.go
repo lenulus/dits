@@ -42,7 +42,15 @@ func (s *Store) Close() error {
 }
 
 func (s *Store) migrate() error {
-	migrations := []string{"migrations/001_initial.sql", "migrations/002_sync_state.sql", "migrations/003_attachments.sql", "migrations/004_actors.sql", "migrations/005_overlay.sql", "migrations/006_relations.sql"}
+	migrations := []string{
+		"migrations/001_initial.sql",
+		"migrations/002_sync_state.sql",
+		"migrations/003_attachments.sql",
+		"migrations/004_actors.sql",
+		"migrations/005_overlay.sql",
+		"migrations/006_relations.sql",
+		"migrations/007_coordination.sql",
+	}
 	for _, m := range migrations {
 		data, err := migrationsFS.ReadFile(m)
 		if err != nil {
@@ -66,19 +74,24 @@ func (s *Store) AppendEvents(ctx context.Context, events []domain.Event) error {
 
 	for _, e := range events {
 		payload := string(e.Payload)
-		parents := marshalEventIDs(e.ParentEventIDs)
+
+		var emittedBy *string
+		if e.EmittedBy != nil {
+			data, _ := json.Marshal(e.EmittedBy)
+			s := string(data)
+			emittedBy = &s
+		}
 
 		_, err := tx.ExecContext(ctx,
-			`INSERT OR IGNORE INTO events (id, issue_id, type, payload, meta_version, actor_id, timestamp, signature)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-			e.ID, e.IssueID, e.Type, payload, e.MetaVersion, e.ActorID,
-			e.Timestamp.UTC().Format(time.RFC3339Nano), e.Signature,
+			`INSERT OR IGNORE INTO events (id, work_item_id, type, payload, meta_version, actor_id, timestamp, emitted_by, signature)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			e.ID, e.WorkItemID, e.Type, payload, e.MetaVersion, e.ActorID,
+			e.Timestamp.UTC().Format(time.RFC3339Nano), emittedBy, e.Signature,
 		)
 		if err != nil {
 			return fmt.Errorf("inserting event %s: %w", e.ID, err)
 		}
 
-		// Insert parent edges.
 		for _, pid := range e.ParentEventIDs {
 			_, err := tx.ExecContext(ctx,
 				`INSERT OR IGNORE INTO event_parents (event_id, parent_id) VALUES (?, ?)`,
@@ -92,13 +105,13 @@ func (s *Store) AppendEvents(ctx context.Context, events []domain.Event) error {
 		// Update DAG heads: remove parents from heads, add this event.
 		if len(e.ParentEventIDs) > 0 {
 			placeholders := make([]string, len(e.ParentEventIDs))
-			args := []any{string(e.IssueID)}
+			args := []any{string(e.WorkItemID)}
 			for i, pid := range e.ParentEventIDs {
 				placeholders[i] = "?"
 				args = append(args, string(pid))
 			}
 			_, err = tx.ExecContext(ctx,
-				fmt.Sprintf(`DELETE FROM dag_heads WHERE issue_id = ? AND event_id IN (%s)`,
+				fmt.Sprintf(`DELETE FROM dag_heads WHERE work_item_id = ? AND event_id IN (%s)`,
 					strings.Join(placeholders, ",")),
 				args...,
 			)
@@ -108,14 +121,12 @@ func (s *Store) AppendEvents(ctx context.Context, events []domain.Event) error {
 		}
 
 		_, err = tx.ExecContext(ctx,
-			`INSERT OR IGNORE INTO dag_heads (issue_id, event_id) VALUES (?, ?)`,
-			e.IssueID, e.ID,
+			`INSERT OR IGNORE INTO dag_heads (work_item_id, event_id) VALUES (?, ?)`,
+			e.WorkItemID, e.ID,
 		)
 		if err != nil {
 			return fmt.Errorf("inserting head: %w", err)
 		}
-
-		_ = parents // used for reference only
 	}
 
 	return tx.Commit()
@@ -123,7 +134,7 @@ func (s *Store) AppendEvents(ctx context.Context, events []domain.Event) error {
 
 func (s *Store) GetEvent(ctx context.Context, id domain.EventID) (*domain.Event, error) {
 	row := s.db.QueryRowContext(ctx,
-		`SELECT id, issue_id, type, payload, meta_version, actor_id, timestamp, signature FROM events WHERE id = ?`, id)
+		`SELECT id, work_item_id, type, payload, meta_version, actor_id, timestamp, emitted_by, signature FROM events WHERE id = ?`, id)
 
 	e, err := scanEvent(row)
 	if err == sql.ErrNoRows {
@@ -141,10 +152,10 @@ func (s *Store) GetEvent(ctx context.Context, id domain.EventID) (*domain.Event,
 	return e, nil
 }
 
-func (s *Store) GetEventsForIssue(ctx context.Context, issueID domain.CanonicalID) ([]domain.Event, error) {
+func (s *Store) GetEventsForWorkItem(ctx context.Context, workItemID domain.WorkItemID) ([]domain.Event, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, issue_id, type, payload, meta_version, actor_id, timestamp, signature
-		 FROM events WHERE issue_id = ? ORDER BY timestamp`, issueID)
+		`SELECT id, work_item_id, type, payload, meta_version, actor_id, timestamp, emitted_by, signature
+		 FROM events WHERE work_item_id = ? ORDER BY timestamp`, workItemID)
 	if err != nil {
 		return nil, err
 	}
@@ -166,9 +177,9 @@ func (s *Store) GetEventsForIssue(ctx context.Context, issueID domain.CanonicalI
 	return events, rows.Err()
 }
 
-func (s *Store) GetHeads(ctx context.Context, issueID domain.CanonicalID) ([]domain.EventID, error) {
+func (s *Store) GetHeads(ctx context.Context, workItemID domain.WorkItemID) ([]domain.EventID, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT event_id FROM dag_heads WHERE issue_id = ?`, issueID)
+		`SELECT event_id FROM dag_heads WHERE work_item_id = ?`, workItemID)
 	if err != nil {
 		return nil, err
 	}
@@ -222,9 +233,9 @@ func (s *Store) getParents(ctx context.Context, eventID domain.EventID) ([]domai
 	return parents, rows.Err()
 }
 
-// --- IssueStore ---
+// --- WorkItemStore ---
 
-func (s *Store) UpsertIssue(ctx context.Context, issue *domain.Issue) error {
+func (s *Store) UpsertWorkItem(ctx context.Context, wi *domain.WorkItem) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -232,89 +243,211 @@ func (s *Store) UpsertIssue(ctx context.Context, issue *domain.Issue) error {
 	defer tx.Rollback()
 
 	var closedAt *string
-	if issue.ClosedAt != nil {
-		v := issue.ClosedAt.UTC().Format(time.RFC3339Nano)
+	if wi.ClosedAt != nil {
+		v := wi.ClosedAt.UTC().Format(time.RFC3339Nano)
 		closedAt = &v
 	}
 
 	var sharedID *string
-	if issue.SharedID != "" {
-		v := string(issue.SharedID)
+	if wi.SharedID != "" {
+		v := string(wi.SharedID)
 		sharedID = &v
 	}
 
+	var leaseHolder *string
+	if wi.LeaseHolder != nil {
+		v := string(*wi.LeaseHolder)
+		leaseHolder = &v
+	}
+
+	var leaseExpiresAt *string
+	if wi.LeaseExpiresAt != nil {
+		v := wi.LeaseExpiresAt.UTC().Format(time.RFC3339Nano)
+		leaseExpiresAt = &v
+	}
+
+	var currentAttempt *string
+	if wi.CurrentAttempt != nil {
+		v := string(*wi.CurrentAttempt)
+		currentAttempt = &v
+	}
+
 	_, err = tx.ExecContext(ctx,
-		`INSERT INTO issues (id, shared_id, title, body, status, type_slug, priority, created_by, created_at, updated_at, closed_at, event_count)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`INSERT INTO work_items (id, shared_id, kind, title, body, status, priority,
+		  lease_holder, lease_expires_at, current_attempt, blocked, blocked_reason,
+		  created_by, created_at, updated_at, closed_at, event_count)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(id) DO UPDATE SET
 		   shared_id = excluded.shared_id,
+		   kind = excluded.kind,
 		   title = excluded.title,
 		   body = excluded.body,
 		   status = excluded.status,
-		   type_slug = excluded.type_slug,
 		   priority = excluded.priority,
+		   lease_holder = excluded.lease_holder,
+		   lease_expires_at = excluded.lease_expires_at,
+		   current_attempt = excluded.current_attempt,
+		   blocked = excluded.blocked,
+		   blocked_reason = excluded.blocked_reason,
 		   updated_at = excluded.updated_at,
 		   closed_at = excluded.closed_at,
 		   event_count = excluded.event_count`,
-		issue.ID, sharedID, issue.Title, issue.Body, issue.Status, issue.TypeSlug, issue.Priority,
-		issue.CreatedBy, issue.CreatedAt.UTC().Format(time.RFC3339Nano),
-		issue.UpdatedAt.UTC().Format(time.RFC3339Nano), closedAt, issue.EventCount,
+		wi.ID, sharedID, wi.Kind, wi.Title, wi.Body, wi.Status, wi.Priority,
+		leaseHolder, leaseExpiresAt, currentAttempt,
+		boolToInt(wi.Blocked), wi.BlockedReason,
+		wi.CreatedBy, wi.CreatedAt.UTC().Format(time.RFC3339Nano),
+		wi.UpdatedAt.UTC().Format(time.RFC3339Nano), closedAt, wi.EventCount,
 	)
 	if err != nil {
-		return fmt.Errorf("upserting issue: %w", err)
+		return fmt.Errorf("upserting work item: %w", err)
 	}
 
 	// Replace labels.
-	_, _ = tx.ExecContext(ctx, `DELETE FROM issue_labels WHERE issue_id = ?`, issue.ID)
-	for _, l := range issue.Labels {
-		_, err := tx.ExecContext(ctx, `INSERT INTO issue_labels (issue_id, label_slug) VALUES (?, ?)`, issue.ID, l)
-		if err != nil {
+	_, _ = tx.ExecContext(ctx, `DELETE FROM work_item_labels WHERE work_item_id = ?`, wi.ID)
+	for _, l := range wi.Labels {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO work_item_labels (work_item_id, label_slug) VALUES (?, ?)`, wi.ID, l); err != nil {
 			return err
 		}
 	}
 
 	// Replace assignees.
-	_, _ = tx.ExecContext(ctx, `DELETE FROM issue_assignees WHERE issue_id = ?`, issue.ID)
-	for _, a := range issue.Assignees {
-		_, err := tx.ExecContext(ctx, `INSERT INTO issue_assignees (issue_id, actor_id) VALUES (?, ?)`, issue.ID, a)
-		if err != nil {
+	_, _ = tx.ExecContext(ctx, `DELETE FROM work_item_assignees WHERE work_item_id = ?`, wi.ID)
+	for _, a := range wi.Assignees {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO work_item_assignees (work_item_id, actor_id) VALUES (?, ?)`, wi.ID, a); err != nil {
 			return err
 		}
 	}
 
 	// Replace comments.
-	_, _ = tx.ExecContext(ctx, `DELETE FROM issue_comments WHERE issue_id = ?`, issue.ID)
-	for _, c := range issue.Comments {
-		_, err := tx.ExecContext(ctx,
-			`INSERT INTO issue_comments (event_id, issue_id, actor_id, body, timestamp) VALUES (?, ?, ?, ?, ?)`,
-			c.EventID, issue.ID, c.ActorID, c.Body, c.Timestamp.UTC().Format(time.RFC3339Nano),
-		)
-		if err != nil {
+	_, _ = tx.ExecContext(ctx, `DELETE FROM work_item_comments WHERE work_item_id = ?`, wi.ID)
+	for _, c := range wi.Comments {
+		var producedBy *string
+		if c.ProducedBy != nil {
+			data, _ := json.Marshal(c.ProducedBy)
+			s := string(data)
+			producedBy = &s
+		}
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO work_item_comments (event_id, work_item_id, actor_id, body, produced_by, timestamp) VALUES (?, ?, ?, ?, ?, ?)`,
+			c.EventID, wi.ID, c.ActorID, c.Body, producedBy, c.Timestamp.UTC().Format(time.RFC3339Nano),
+		); err != nil {
 			return err
 		}
 	}
 
-	// Replace attachments.
-	_, _ = tx.ExecContext(ctx, `DELETE FROM issue_attachments WHERE issue_id = ?`, issue.ID)
-	for _, a := range issue.Attachments {
-		_, err := tx.ExecContext(ctx,
-			`INSERT INTO issue_attachments (attachment_id, issue_id, content_hash, filename, mime_type, size_bytes, added_by, added_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-			a.ID, issue.ID, a.ContentHash, a.Filename, a.MimeType, a.SizeBytes,
+	// Replace artifacts.
+	_, _ = tx.ExecContext(ctx, `DELETE FROM work_item_artifacts WHERE work_item_id = ?`, wi.ID)
+	for _, a := range wi.Artifacts {
+		var producedBy *string
+		if a.ProducedBy != nil {
+			data, _ := json.Marshal(a.ProducedBy)
+			s := string(data)
+			producedBy = &s
+		}
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO work_item_artifacts (artifact_id, work_item_id, content_hash, filename, mime_type, size_bytes, artifact_type, semantic_role, produced_by, added_by, added_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			a.ID, wi.ID, a.ContentHash, a.Filename, a.MimeType, a.SizeBytes,
+			a.ArtifactType, a.SemanticRole, producedBy,
 			a.AddedBy, a.AddedAt.UTC().Format(time.RFC3339Nano),
-		)
-		if err != nil {
+		); err != nil {
 			return err
 		}
 	}
 
 	// Replace relations.
-	_, _ = tx.ExecContext(ctx, `DELETE FROM issue_relations WHERE issue_id = ?`, issue.ID)
-	for _, r := range issue.Relations {
-		_, err := tx.ExecContext(ctx,
-			`INSERT INTO issue_relations (issue_id, relation_type, target_issue) VALUES (?, ?, ?)`,
-			issue.ID, r.Type, r.TargetIssue)
-		if err != nil {
+	_, _ = tx.ExecContext(ctx, `DELETE FROM work_item_relations WHERE work_item_id = ?`, wi.ID)
+	for _, r := range wi.Relations {
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO work_item_relations (work_item_id, relation_type, target_work_item) VALUES (?, ?, ?)`,
+			wi.ID, r.Type, r.TargetWorkItem); err != nil {
+			return err
+		}
+	}
+
+	// Replace checkpoints.
+	_, _ = tx.ExecContext(ctx, `DELETE FROM work_item_checkpoints WHERE work_item_id = ?`, wi.ID)
+	for _, cp := range wi.Checkpoints {
+		var data *string
+		if cp.Data != nil {
+			s := string(cp.Data)
+			data = &s
+		}
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO work_item_checkpoints (event_id, work_item_id, attempt_id, summary, progress, next_step, data, timestamp)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			cp.EventID, wi.ID, cp.AttemptID, cp.Summary, cp.Progress, cp.NextStep, data,
+			cp.Timestamp.UTC().Format(time.RFC3339Nano),
+		); err != nil {
+			return err
+		}
+	}
+
+	// Replace observations.
+	_, _ = tx.ExecContext(ctx, `DELETE FROM work_item_observations WHERE work_item_id = ?`, wi.ID)
+	for _, obs := range wi.Observations {
+		var data, producedBy *string
+		if obs.Data != nil {
+			s := string(obs.Data)
+			data = &s
+		}
+		if obs.ProducedBy != nil {
+			d, _ := json.Marshal(obs.ProducedBy)
+			s := string(d)
+			producedBy = &s
+		}
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO work_item_observations (event_id, work_item_id, summary, data, produced_by, timestamp)
+			 VALUES (?, ?, ?, ?, ?, ?)`,
+			obs.EventID, wi.ID, obs.Summary, data, producedBy,
+			obs.Timestamp.UTC().Format(time.RFC3339Nano),
+		); err != nil {
+			return err
+		}
+	}
+
+	// Replace findings.
+	_, _ = tx.ExecContext(ctx, `DELETE FROM work_item_findings WHERE work_item_id = ?`, wi.ID)
+	for _, f := range wi.Findings {
+		var evidenceRefs, producedBy *string
+		if len(f.EvidenceRefs) > 0 {
+			d, _ := json.Marshal(f.EvidenceRefs)
+			s := string(d)
+			evidenceRefs = &s
+		}
+		if f.ProducedBy != nil {
+			d, _ := json.Marshal(f.ProducedBy)
+			s := string(d)
+			producedBy = &s
+		}
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO work_item_findings (event_id, work_item_id, statement, confidence, source, evidence_refs, produced_by, retracted, timestamp)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			f.EventID, wi.ID, f.Statement, f.Confidence, f.Source, evidenceRefs, producedBy,
+			boolToInt(f.Retracted), f.Timestamp.UTC().Format(time.RFC3339Nano),
+		); err != nil {
+			return err
+		}
+	}
+
+	// Replace attempts.
+	_, _ = tx.ExecContext(ctx, `DELETE FROM work_item_attempts WHERE work_item_id = ?`, wi.ID)
+	for _, a := range wi.Attempts {
+		var completedAt, lastCheckpoint *string
+		if a.CompletedAt != nil {
+			v := a.CompletedAt.UTC().Format(time.RFC3339Nano)
+			completedAt = &v
+		}
+		if a.LastCheckpoint != nil {
+			v := string(*a.LastCheckpoint)
+			lastCheckpoint = &v
+		}
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO work_item_attempts (attempt_id, work_item_id, number, actor_id, started_at, completed_at, status, last_checkpoint)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			a.AttemptID, wi.ID, a.Number, a.ActorID,
+			a.StartedAt.UTC().Format(time.RFC3339Nano), completedAt, a.Status, lastCheckpoint,
+		); err != nil {
 			return err
 		}
 	}
@@ -322,41 +455,56 @@ func (s *Store) UpsertIssue(ctx context.Context, issue *domain.Issue) error {
 	return tx.Commit()
 }
 
-func (s *Store) GetIssue(ctx context.Context, id domain.CanonicalID) (*domain.Issue, error) {
+func (s *Store) GetWorkItem(ctx context.Context, id domain.WorkItemID) (*domain.WorkItem, error) {
 	row := s.db.QueryRowContext(ctx,
-		`SELECT id, shared_id, title, body, status, type_slug, priority, created_by, created_at, updated_at, closed_at, event_count
-		 FROM issues WHERE id = ?`, id)
-	return s.scanIssue(ctx, row)
+		`SELECT id, shared_id, kind, title, body, status, priority,
+		  lease_holder, lease_expires_at, current_attempt, blocked, blocked_reason,
+		  created_by, created_at, updated_at, closed_at, event_count
+		 FROM work_items WHERE id = ?`, id)
+	return s.scanWorkItem(ctx, row)
 }
 
-func (s *Store) GetIssueBySharedID(ctx context.Context, id domain.SharedID) (*domain.Issue, error) {
+func (s *Store) GetWorkItemBySharedID(ctx context.Context, id domain.SharedID) (*domain.WorkItem, error) {
 	row := s.db.QueryRowContext(ctx,
-		`SELECT id, shared_id, title, body, status, type_slug, priority, created_by, created_at, updated_at, closed_at, event_count
-		 FROM issues WHERE shared_id = ?`, id)
-	return s.scanIssue(ctx, row)
+		`SELECT id, shared_id, kind, title, body, status, priority,
+		  lease_holder, lease_expires_at, current_attempt, blocked, blocked_reason,
+		  created_by, created_at, updated_at, closed_at, event_count
+		 FROM work_items WHERE shared_id = ?`, id)
+	return s.scanWorkItem(ctx, row)
 }
 
-func (s *Store) ListIssues(ctx context.Context, filter store.IssueFilter) ([]domain.Issue, error) {
-	query := `SELECT i.id, i.shared_id, i.title, i.body, i.status, i.type_slug, i.priority, i.created_by, i.created_at, i.updated_at, i.closed_at, i.event_count FROM issues i`
+func (s *Store) ListWorkItems(ctx context.Context, filter store.WorkItemFilter) ([]domain.WorkItem, error) {
+	query := `SELECT w.id, w.shared_id, w.kind, w.title, w.body, w.status, w.priority,
+	  w.lease_holder, w.lease_expires_at, w.current_attempt, w.blocked, w.blocked_reason,
+	  w.created_by, w.created_at, w.updated_at, w.closed_at, w.event_count
+	  FROM work_items w`
 	var conditions []string
 	var args []any
 
 	if filter.Status != "" {
-		conditions = append(conditions, "i.status = ?")
+		conditions = append(conditions, "w.status = ?")
 		args = append(args, filter.Status)
 	}
+	if filter.Kind != "" {
+		conditions = append(conditions, "w.kind = ?")
+		args = append(args, filter.Kind)
+	}
 	if filter.Label != "" {
-		query += " JOIN issue_labels il ON i.id = il.issue_id"
-		conditions = append(conditions, "il.label_slug = ?")
+		query += " JOIN work_item_labels wl ON w.id = wl.work_item_id"
+		conditions = append(conditions, "wl.label_slug = ?")
 		args = append(args, filter.Label)
 	}
 	if filter.Assignee != "" {
-		query += " JOIN issue_assignees ia ON i.id = ia.issue_id"
-		conditions = append(conditions, "ia.actor_id = ?")
+		query += " JOIN work_item_assignees wa ON w.id = wa.work_item_id"
+		conditions = append(conditions, "wa.actor_id = ?")
 		args = append(args, filter.Assignee)
 	}
+	if filter.Blocked != nil {
+		conditions = append(conditions, "w.blocked = ?")
+		args = append(args, boolToInt(*filter.Blocked))
+	}
 	if filter.Query != "" {
-		conditions = append(conditions, "(i.title LIKE ? OR i.body LIKE ?)")
+		conditions = append(conditions, "(w.title LIKE ? OR w.body LIKE ?)")
 		q := "%" + filter.Query + "%"
 		args = append(args, q, q)
 	}
@@ -364,7 +512,7 @@ func (s *Store) ListIssues(ctx context.Context, filter store.IssueFilter) ([]dom
 	if len(conditions) > 0 {
 		query += " WHERE " + strings.Join(conditions, " AND ")
 	}
-	query += " ORDER BY i.updated_at DESC"
+	query += " ORDER BY w.updated_at DESC"
 
 	if filter.Limit > 0 {
 		query += fmt.Sprintf(" LIMIT %d", filter.Limit)
@@ -379,25 +527,24 @@ func (s *Store) ListIssues(ctx context.Context, filter store.IssueFilter) ([]dom
 	}
 	defer rows.Close()
 
-	var issues []domain.Issue
+	var items []domain.WorkItem
 	for rows.Next() {
-		issue, err := s.scanIssueRows(ctx, rows)
+		wi, err := s.scanWorkItemRows(ctx, rows)
 		if err != nil {
 			return nil, err
 		}
-		issues = append(issues, *issue)
+		items = append(items, *wi)
 	}
-	return issues, rows.Err()
+	return items, rows.Err()
 }
 
-func (s *Store) AllocateSharedID(ctx context.Context, issueID domain.CanonicalID, projectKey string) (domain.SharedID, error) {
+func (s *Store) AllocateSharedID(ctx context.Context, workItemID domain.WorkItemID, projectKey string) (domain.SharedID, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return "", err
 	}
 	defer tx.Rollback()
 
-	// Ensure counter row exists.
 	_, err = tx.ExecContext(ctx,
 		`INSERT OR IGNORE INTO shared_id_counter (project_key, next_id) VALUES (?, 1)`, projectKey)
 	if err != nil {
@@ -419,8 +566,7 @@ func (s *Store) AllocateSharedID(ctx context.Context, issueID domain.CanonicalID
 
 	sharedID := domain.SharedID(fmt.Sprintf("%s-%d", projectKey, nextID))
 
-	// Update the issue with the shared ID.
-	_, err = tx.ExecContext(ctx, `UPDATE issues SET shared_id = ? WHERE id = ?`, sharedID, issueID)
+	_, err = tx.ExecContext(ctx, `UPDATE work_items SET shared_id = ? WHERE id = ?`, sharedID, workItemID)
 	if err != nil {
 		return "", err
 	}
@@ -470,7 +616,6 @@ func (s *Store) SaveMetaIfVersion(ctx context.Context, meta *domain.MetaConfig, 
 	}
 	defer tx.Rollback()
 
-	// Check current HEAD version.
 	var currentVersion int64
 	err = tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(version), 0) FROM meta_config`).Scan(&currentVersion)
 	if err != nil {
@@ -501,24 +646,33 @@ type scanner interface {
 
 func scanEvent(row scanner) (*domain.Event, error) {
 	var e domain.Event
-	var id, issueID, eventType, payload, actorID, ts string
+	var id, workItemID, eventType, payload, actorID, ts string
 	var metaVersion int64
+	var emittedBy sql.NullString
 	var sig []byte
 
-	err := row.Scan(&id, &issueID, &eventType, &payload, &metaVersion, &actorID, &ts, &sig)
+	err := row.Scan(&id, &workItemID, &eventType, &payload, &metaVersion, &actorID, &ts, &emittedBy, &sig)
 	if err != nil {
 		return nil, err
 	}
 
 	t, _ := time.Parse(time.RFC3339Nano, ts)
 	e.ID = domain.EventID(id)
-	e.IssueID = domain.CanonicalID(issueID)
+	e.WorkItemID = domain.WorkItemID(workItemID)
 	e.Type = domain.EventType(eventType)
 	e.Payload = json.RawMessage(payload)
 	e.MetaVersion = domain.MetaVersion(metaVersion)
 	e.ActorID = domain.ActorID(actorID)
 	e.Timestamp = t
 	e.Signature = sig
+
+	if emittedBy.Valid {
+		var eb domain.EmittedBy
+		if err := json.Unmarshal([]byte(emittedBy.String), &eb); err == nil {
+			e.EmittedBy = &eb
+		}
+	}
+
 	return &e, nil
 }
 
@@ -526,14 +680,15 @@ func scanEventRows(rows *sql.Rows) (*domain.Event, error) {
 	return scanEvent(rows)
 }
 
-func (s *Store) scanIssue(ctx context.Context, row *sql.Row) (*domain.Issue, error) {
-	issue := &domain.Issue{}
-	var sharedID, closedAt sql.NullString
+func (s *Store) scanWorkItem(ctx context.Context, row *sql.Row) (*domain.WorkItem, error) {
+	wi := &domain.WorkItem{}
+	var sharedID, closedAt, leaseHolder, leaseExpiresAt, currentAttempt sql.NullString
 	var createdAt, updatedAt string
+	var blocked int
 
-	err := row.Scan(&issue.ID, &sharedID, &issue.Title, &issue.Body, &issue.Status,
-		&issue.TypeSlug, &issue.Priority, &issue.CreatedBy,
-		&createdAt, &updatedAt, &closedAt, &issue.EventCount)
+	err := row.Scan(&wi.ID, &sharedID, &wi.Kind, &wi.Title, &wi.Body, &wi.Status, &wi.Priority,
+		&leaseHolder, &leaseExpiresAt, &currentAttempt, &blocked, &wi.BlockedReason,
+		&wi.CreatedBy, &createdAt, &updatedAt, &closedAt, &wi.EventCount)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
@@ -542,131 +697,284 @@ func (s *Store) scanIssue(ctx context.Context, row *sql.Row) (*domain.Issue, err
 	}
 
 	if sharedID.Valid {
-		issue.SharedID = domain.SharedID(sharedID.String)
+		wi.SharedID = domain.SharedID(sharedID.String)
 	}
-	issue.CreatedAt, _ = time.Parse(time.RFC3339Nano, createdAt)
-	issue.UpdatedAt, _ = time.Parse(time.RFC3339Nano, updatedAt)
+	wi.CreatedAt, _ = time.Parse(time.RFC3339Nano, createdAt)
+	wi.UpdatedAt, _ = time.Parse(time.RFC3339Nano, updatedAt)
 	if closedAt.Valid {
 		t, _ := time.Parse(time.RFC3339Nano, closedAt.String)
-		issue.ClosedAt = &t
+		wi.ClosedAt = &t
 	}
+	if leaseHolder.Valid {
+		a := domain.ActorID(leaseHolder.String)
+		wi.LeaseHolder = &a
+	}
+	if leaseExpiresAt.Valid {
+		t, _ := time.Parse(time.RFC3339Nano, leaseExpiresAt.String)
+		wi.LeaseExpiresAt = &t
+	}
+	if currentAttempt.Valid {
+		a := domain.AttemptID(currentAttempt.String)
+		wi.CurrentAttempt = &a
+	}
+	wi.Blocked = blocked != 0
 
-	if err := s.loadIssueRelations(ctx, issue); err != nil {
+	if err := s.loadWorkItemCollections(ctx, wi); err != nil {
 		return nil, err
 	}
-	return issue, nil
+	return wi, nil
 }
 
-func (s *Store) scanIssueRows(ctx context.Context, rows *sql.Rows) (*domain.Issue, error) {
-	issue := &domain.Issue{}
-	var sharedID, closedAt sql.NullString
+func (s *Store) scanWorkItemRows(ctx context.Context, rows *sql.Rows) (*domain.WorkItem, error) {
+	wi := &domain.WorkItem{}
+	var sharedID, closedAt, leaseHolder, leaseExpiresAt, currentAttempt sql.NullString
 	var createdAt, updatedAt string
+	var blocked int
 
-	err := rows.Scan(&issue.ID, &sharedID, &issue.Title, &issue.Body, &issue.Status,
-		&issue.TypeSlug, &issue.Priority, &issue.CreatedBy,
-		&createdAt, &updatedAt, &closedAt, &issue.EventCount)
+	err := rows.Scan(&wi.ID, &sharedID, &wi.Kind, &wi.Title, &wi.Body, &wi.Status, &wi.Priority,
+		&leaseHolder, &leaseExpiresAt, &currentAttempt, &blocked, &wi.BlockedReason,
+		&wi.CreatedBy, &createdAt, &updatedAt, &closedAt, &wi.EventCount)
 	if err != nil {
 		return nil, err
 	}
 
 	if sharedID.Valid {
-		issue.SharedID = domain.SharedID(sharedID.String)
+		wi.SharedID = domain.SharedID(sharedID.String)
 	}
-	issue.CreatedAt, _ = time.Parse(time.RFC3339Nano, createdAt)
-	issue.UpdatedAt, _ = time.Parse(time.RFC3339Nano, updatedAt)
+	wi.CreatedAt, _ = time.Parse(time.RFC3339Nano, createdAt)
+	wi.UpdatedAt, _ = time.Parse(time.RFC3339Nano, updatedAt)
 	if closedAt.Valid {
 		t, _ := time.Parse(time.RFC3339Nano, closedAt.String)
-		issue.ClosedAt = &t
+		wi.ClosedAt = &t
 	}
+	if leaseHolder.Valid {
+		a := domain.ActorID(leaseHolder.String)
+		wi.LeaseHolder = &a
+	}
+	if leaseExpiresAt.Valid {
+		t, _ := time.Parse(time.RFC3339Nano, leaseExpiresAt.String)
+		wi.LeaseExpiresAt = &t
+	}
+	if currentAttempt.Valid {
+		a := domain.AttemptID(currentAttempt.String)
+		wi.CurrentAttempt = &a
+	}
+	wi.Blocked = blocked != 0
 
-	if err := s.loadIssueRelations(ctx, issue); err != nil {
+	if err := s.loadWorkItemCollections(ctx, wi); err != nil {
 		return nil, err
 	}
-	return issue, nil
+	return wi, nil
 }
 
-func (s *Store) loadIssueRelations(ctx context.Context, issue *domain.Issue) error {
+func (s *Store) loadWorkItemCollections(ctx context.Context, wi *domain.WorkItem) error {
 	// Labels
-	rows, err := s.db.QueryContext(ctx, `SELECT label_slug FROM issue_labels WHERE issue_id = ?`, issue.ID)
+	rows, err := s.db.QueryContext(ctx, `SELECT label_slug FROM work_item_labels WHERE work_item_id = ?`, wi.ID)
 	if err != nil {
 		return err
 	}
 	defer rows.Close()
-	issue.Labels = []string{}
+	wi.Labels = []string{}
 	for rows.Next() {
 		var l string
 		if err := rows.Scan(&l); err != nil {
 			return err
 		}
-		issue.Labels = append(issue.Labels, l)
+		wi.Labels = append(wi.Labels, l)
 	}
 
 	// Assignees
-	rows2, err := s.db.QueryContext(ctx, `SELECT actor_id FROM issue_assignees WHERE issue_id = ?`, issue.ID)
+	rows2, err := s.db.QueryContext(ctx, `SELECT actor_id FROM work_item_assignees WHERE work_item_id = ?`, wi.ID)
 	if err != nil {
 		return err
 	}
 	defer rows2.Close()
-	issue.Assignees = []domain.ActorID{}
+	wi.Assignees = []domain.ActorID{}
 	for rows2.Next() {
 		var a string
 		if err := rows2.Scan(&a); err != nil {
 			return err
 		}
-		issue.Assignees = append(issue.Assignees, domain.ActorID(a))
+		wi.Assignees = append(wi.Assignees, domain.ActorID(a))
 	}
 
 	// Comments
 	rows3, err := s.db.QueryContext(ctx,
-		`SELECT event_id, actor_id, body, timestamp FROM issue_comments WHERE issue_id = ? ORDER BY timestamp`, issue.ID)
+		`SELECT event_id, actor_id, body, produced_by, timestamp FROM work_item_comments WHERE work_item_id = ? ORDER BY timestamp`, wi.ID)
 	if err != nil {
 		return err
 	}
 	defer rows3.Close()
-	issue.Comments = []domain.Comment{}
+	wi.Comments = []domain.Comment{}
 	for rows3.Next() {
 		var c domain.Comment
 		var ts string
-		if err := rows3.Scan(&c.EventID, &c.ActorID, &c.Body, &ts); err != nil {
+		var producedBy sql.NullString
+		if err := rows3.Scan(&c.EventID, &c.ActorID, &c.Body, &producedBy, &ts); err != nil {
 			return err
 		}
 		c.Timestamp, _ = time.Parse(time.RFC3339Nano, ts)
-		issue.Comments = append(issue.Comments, c)
+		if producedBy.Valid {
+			var pb domain.ProducedBy
+			if err := json.Unmarshal([]byte(producedBy.String), &pb); err == nil {
+				c.ProducedBy = &pb
+			}
+		}
+		wi.Comments = append(wi.Comments, c)
 	}
 
-	// Attachments
+	// Artifacts
 	rows4, err := s.db.QueryContext(ctx,
-		`SELECT attachment_id, content_hash, filename, mime_type, size_bytes, added_by, added_at
-		 FROM issue_attachments WHERE issue_id = ? ORDER BY added_at`, issue.ID)
+		`SELECT artifact_id, content_hash, filename, mime_type, size_bytes, artifact_type, semantic_role, produced_by, added_by, added_at
+		 FROM work_item_artifacts WHERE work_item_id = ? ORDER BY added_at`, wi.ID)
 	if err != nil {
 		return err
 	}
 	defer rows4.Close()
-	issue.Attachments = []domain.Attachment{}
+	wi.Artifacts = []domain.Artifact{}
 	for rows4.Next() {
-		var a domain.Attachment
+		var a domain.Artifact
 		var ts string
-		if err := rows4.Scan(&a.ID, &a.ContentHash, &a.Filename, &a.MimeType, &a.SizeBytes, &a.AddedBy, &ts); err != nil {
+		var producedBy sql.NullString
+		if err := rows4.Scan(&a.ID, &a.ContentHash, &a.Filename, &a.MimeType, &a.SizeBytes,
+			&a.ArtifactType, &a.SemanticRole, &producedBy, &a.AddedBy, &ts); err != nil {
 			return err
 		}
 		a.AddedAt, _ = time.Parse(time.RFC3339Nano, ts)
-		issue.Attachments = append(issue.Attachments, a)
+		if producedBy.Valid {
+			var pb domain.ProducedBy
+			if err := json.Unmarshal([]byte(producedBy.String), &pb); err == nil {
+				a.ProducedBy = &pb
+			}
+		}
+		wi.Artifacts = append(wi.Artifacts, a)
 	}
 
 	// Relations
 	rows5, err := s.db.QueryContext(ctx,
-		`SELECT relation_type, target_issue FROM issue_relations WHERE issue_id = ? ORDER BY relation_type, target_issue`, issue.ID)
+		`SELECT relation_type, target_work_item FROM work_item_relations WHERE work_item_id = ? ORDER BY relation_type, target_work_item`, wi.ID)
 	if err != nil {
 		return err
 	}
 	defer rows5.Close()
-	issue.Relations = []domain.Relation{}
+	wi.Relations = []domain.Relation{}
 	for rows5.Next() {
 		var r domain.Relation
-		if err := rows5.Scan(&r.Type, &r.TargetIssue); err != nil {
+		if err := rows5.Scan(&r.Type, &r.TargetWorkItem); err != nil {
 			return err
 		}
-		issue.Relations = append(issue.Relations, r)
+		wi.Relations = append(wi.Relations, r)
+	}
+
+	// Checkpoints
+	rows6, err := s.db.QueryContext(ctx,
+		`SELECT event_id, attempt_id, summary, progress, next_step, data, timestamp
+		 FROM work_item_checkpoints WHERE work_item_id = ? ORDER BY timestamp`, wi.ID)
+	if err != nil {
+		return err
+	}
+	defer rows6.Close()
+	wi.Checkpoints = []domain.Checkpoint{}
+	for rows6.Next() {
+		var cp domain.Checkpoint
+		var ts string
+		var data sql.NullString
+		if err := rows6.Scan(&cp.EventID, &cp.AttemptID, &cp.Summary, &cp.Progress, &cp.NextStep, &data, &ts); err != nil {
+			return err
+		}
+		cp.Timestamp, _ = time.Parse(time.RFC3339Nano, ts)
+		if data.Valid {
+			cp.Data = json.RawMessage(data.String)
+		}
+		wi.Checkpoints = append(wi.Checkpoints, cp)
+	}
+
+	// Observations
+	rows7, err := s.db.QueryContext(ctx,
+		`SELECT event_id, summary, data, produced_by, timestamp
+		 FROM work_item_observations WHERE work_item_id = ? ORDER BY timestamp`, wi.ID)
+	if err != nil {
+		return err
+	}
+	defer rows7.Close()
+	wi.Observations = []domain.Observation{}
+	for rows7.Next() {
+		var obs domain.Observation
+		var ts string
+		var data, producedBy sql.NullString
+		if err := rows7.Scan(&obs.EventID, &obs.Summary, &data, &producedBy, &ts); err != nil {
+			return err
+		}
+		obs.Timestamp, _ = time.Parse(time.RFC3339Nano, ts)
+		if data.Valid {
+			obs.Data = json.RawMessage(data.String)
+		}
+		if producedBy.Valid {
+			var pb domain.ProducedBy
+			if err := json.Unmarshal([]byte(producedBy.String), &pb); err == nil {
+				obs.ProducedBy = &pb
+			}
+		}
+		wi.Observations = append(wi.Observations, obs)
+	}
+
+	// Findings
+	rows8, err := s.db.QueryContext(ctx,
+		`SELECT event_id, statement, confidence, source, evidence_refs, produced_by, retracted, timestamp
+		 FROM work_item_findings WHERE work_item_id = ? ORDER BY timestamp`, wi.ID)
+	if err != nil {
+		return err
+	}
+	defer rows8.Close()
+	wi.Findings = []domain.Finding{}
+	for rows8.Next() {
+		var f domain.Finding
+		var ts string
+		var evidenceRefs, producedBy sql.NullString
+		var retracted int
+		if err := rows8.Scan(&f.EventID, &f.Statement, &f.Confidence, &f.Source, &evidenceRefs, &producedBy, &retracted, &ts); err != nil {
+			return err
+		}
+		f.Timestamp, _ = time.Parse(time.RFC3339Nano, ts)
+		f.Retracted = retracted != 0
+		if evidenceRefs.Valid {
+			json.Unmarshal([]byte(evidenceRefs.String), &f.EvidenceRefs)
+		}
+		if producedBy.Valid {
+			var pb domain.ProducedBy
+			if err := json.Unmarshal([]byte(producedBy.String), &pb); err == nil {
+				f.ProducedBy = &pb
+			}
+		}
+		wi.Findings = append(wi.Findings, f)
+	}
+
+	// Attempts
+	rows9, err := s.db.QueryContext(ctx,
+		`SELECT attempt_id, number, actor_id, started_at, completed_at, status, last_checkpoint
+		 FROM work_item_attempts WHERE work_item_id = ? ORDER BY number`, wi.ID)
+	if err != nil {
+		return err
+	}
+	defer rows9.Close()
+	wi.Attempts = []domain.ExecutionAttempt{}
+	for rows9.Next() {
+		var a domain.ExecutionAttempt
+		var startedAt string
+		var completedAt, lastCheckpoint sql.NullString
+		if err := rows9.Scan(&a.AttemptID, &a.Number, &a.ActorID, &startedAt, &completedAt, &a.Status, &lastCheckpoint); err != nil {
+			return err
+		}
+		a.StartedAt, _ = time.Parse(time.RFC3339Nano, startedAt)
+		if completedAt.Valid {
+			t, _ := time.Parse(time.RFC3339Nano, completedAt.String)
+			a.CompletedAt = &t
+		}
+		if lastCheckpoint.Valid {
+			eid := domain.EventID(lastCheckpoint.String)
+			a.LastCheckpoint = &eid
+		}
+		wi.Attempts = append(wi.Attempts, a)
 	}
 
 	return nil
@@ -680,6 +988,13 @@ func marshalEventIDs(ids []domain.EventID) string {
 	return string(data)
 }
 
+func boolToInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
+
 // --- EventStore extensions ---
 
 func (s *Store) HasEvent(ctx context.Context, id domain.EventID) (bool, error) {
@@ -688,13 +1003,13 @@ func (s *Store) HasEvent(ctx context.Context, id domain.EventID) (bool, error) {
 	return count > 0, err
 }
 
-func (s *Store) GetAffectedIssueIDs(ctx context.Context, events []domain.Event) ([]domain.CanonicalID, error) {
-	seen := make(map[domain.CanonicalID]struct{})
-	var ids []domain.CanonicalID
+func (s *Store) GetAffectedWorkItemIDs(ctx context.Context, events []domain.Event) ([]domain.WorkItemID, error) {
+	seen := make(map[domain.WorkItemID]struct{})
+	var ids []domain.WorkItemID
 	for _, e := range events {
-		if _, ok := seen[e.IssueID]; !ok {
-			seen[e.IssueID] = struct{}{}
-			ids = append(ids, e.IssueID)
+		if _, ok := seen[e.WorkItemID]; !ok {
+			seen[e.WorkItemID] = struct{}{}
+			ids = append(ids, e.WorkItemID)
 		}
 	}
 	return ids, nil
@@ -782,17 +1097,17 @@ func (s *Store) GetActorPublicKey(ctx context.Context, actorID domain.ActorID) (
 
 // --- OverlayStore ---
 
-func (s *Store) SetAnnotation(ctx context.Context, issueID domain.CanonicalID, key, value string) error {
+func (s *Store) SetAnnotation(ctx context.Context, workItemID domain.WorkItemID, key, value string) error {
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO overlay_annotations (issue_id, key, value) VALUES (?, ?, ?)
-		 ON CONFLICT(issue_id, key) DO UPDATE SET value = excluded.value`,
-		issueID, key, value)
+		`INSERT INTO overlay_annotations (work_item_id, key, value) VALUES (?, ?, ?)
+		 ON CONFLICT(work_item_id, key) DO UPDATE SET value = excluded.value`,
+		workItemID, key, value)
 	return err
 }
 
-func (s *Store) GetAnnotations(ctx context.Context, issueID domain.CanonicalID) (map[string]string, error) {
+func (s *Store) GetAnnotations(ctx context.Context, workItemID domain.WorkItemID) (map[string]string, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT key, value FROM overlay_annotations WHERE issue_id = ? ORDER BY key`, issueID)
+		`SELECT key, value FROM overlay_annotations WHERE work_item_id = ? ORDER BY key`, workItemID)
 	if err != nil {
 		return nil, err
 	}
@@ -809,28 +1124,28 @@ func (s *Store) GetAnnotations(ctx context.Context, issueID domain.CanonicalID) 
 	return result, rows.Err()
 }
 
-func (s *Store) DeleteAnnotation(ctx context.Context, issueID domain.CanonicalID, key string) error {
+func (s *Store) DeleteAnnotation(ctx context.Context, workItemID domain.WorkItemID, key string) error {
 	_, err := s.db.ExecContext(ctx,
-		`DELETE FROM overlay_annotations WHERE issue_id = ? AND key = ?`, issueID, key)
+		`DELETE FROM overlay_annotations WHERE work_item_id = ? AND key = ?`, workItemID, key)
 	return err
 }
 
-func (s *Store) AddPrivateLabel(ctx context.Context, issueID domain.CanonicalID, label string) error {
+func (s *Store) AddPrivateLabel(ctx context.Context, workItemID domain.WorkItemID, label string) error {
 	_, err := s.db.ExecContext(ctx,
-		`INSERT OR IGNORE INTO overlay_labels (issue_id, label) VALUES (?, ?)`,
-		issueID, label)
+		`INSERT OR IGNORE INTO overlay_labels (work_item_id, label) VALUES (?, ?)`,
+		workItemID, label)
 	return err
 }
 
-func (s *Store) RemovePrivateLabel(ctx context.Context, issueID domain.CanonicalID, label string) error {
+func (s *Store) RemovePrivateLabel(ctx context.Context, workItemID domain.WorkItemID, label string) error {
 	_, err := s.db.ExecContext(ctx,
-		`DELETE FROM overlay_labels WHERE issue_id = ? AND label = ?`, issueID, label)
+		`DELETE FROM overlay_labels WHERE work_item_id = ? AND label = ?`, workItemID, label)
 	return err
 }
 
-func (s *Store) GetPrivateLabels(ctx context.Context, issueID domain.CanonicalID) ([]string, error) {
+func (s *Store) GetPrivateLabels(ctx context.Context, workItemID domain.WorkItemID) ([]string, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT label FROM overlay_labels WHERE issue_id = ? ORDER BY label`, issueID)
+		`SELECT label FROM overlay_labels WHERE work_item_id = ? ORDER BY label`, workItemID)
 	if err != nil {
 		return nil, err
 	}

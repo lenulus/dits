@@ -7,10 +7,12 @@ import (
 	"github.com/lenulus/pf/internal/domain"
 )
 
-type IssueFilter struct {
+type WorkItemFilter struct {
 	Status   string
+	Kind     string
 	Label    string
 	Assignee domain.ActorID
+	Blocked  *bool
 	Query    string // free-text search on title/body
 	Limit    int
 	Offset   int
@@ -19,26 +21,24 @@ type IssueFilter struct {
 type EventStore interface {
 	AppendEvents(ctx context.Context, events []domain.Event) error
 	GetEvent(ctx context.Context, id domain.EventID) (*domain.Event, error)
-	GetEventsForIssue(ctx context.Context, issueID domain.CanonicalID) ([]domain.Event, error)
-	GetHeads(ctx context.Context, issueID domain.CanonicalID) ([]domain.EventID, error)
+	GetEventsForWorkItem(ctx context.Context, workItemID domain.WorkItemID) ([]domain.Event, error)
+	GetHeads(ctx context.Context, workItemID domain.WorkItemID) ([]domain.EventID, error)
 	GetAllHeads(ctx context.Context) ([]domain.EventID, error)
 	HasEvent(ctx context.Context, id domain.EventID) (bool, error)
-	GetAffectedIssueIDs(ctx context.Context, events []domain.Event) ([]domain.CanonicalID, error)
+	GetAffectedWorkItemIDs(ctx context.Context, events []domain.Event) ([]domain.WorkItemID, error)
 }
 
-type IssueStore interface {
-	UpsertIssue(ctx context.Context, issue *domain.Issue) error
-	GetIssue(ctx context.Context, id domain.CanonicalID) (*domain.Issue, error)
-	GetIssueBySharedID(ctx context.Context, id domain.SharedID) (*domain.Issue, error)
-	ListIssues(ctx context.Context, filter IssueFilter) ([]domain.Issue, error)
-	AllocateSharedID(ctx context.Context, issueID domain.CanonicalID, projectKey string) (domain.SharedID, error)
+type WorkItemStore interface {
+	UpsertWorkItem(ctx context.Context, workItem *domain.WorkItem) error
+	GetWorkItem(ctx context.Context, id domain.WorkItemID) (*domain.WorkItem, error)
+	GetWorkItemBySharedID(ctx context.Context, id domain.SharedID) (*domain.WorkItem, error)
+	ListWorkItems(ctx context.Context, filter WorkItemFilter) ([]domain.WorkItem, error)
+	AllocateSharedID(ctx context.Context, workItemID domain.WorkItemID, projectKey string) (domain.SharedID, error)
 }
 
 type MetaStore interface {
 	GetCurrentMeta(ctx context.Context) (*domain.MetaConfig, error)
 	SaveMeta(ctx context.Context, meta *domain.MetaConfig) error
-	// SaveMetaIfVersion saves only if expectedVersion matches current HEAD.
-	// Returns ErrMetaConflict if the version doesn't match.
 	SaveMetaIfVersion(ctx context.Context, meta *domain.MetaConfig, expectedVersion domain.MetaVersion) error
 }
 
@@ -57,17 +57,17 @@ type SyncStore interface {
 }
 
 type OverlayStore interface {
-	SetAnnotation(ctx context.Context, issueID domain.CanonicalID, key, value string) error
-	GetAnnotations(ctx context.Context, issueID domain.CanonicalID) (map[string]string, error)
-	DeleteAnnotation(ctx context.Context, issueID domain.CanonicalID, key string) error
-	AddPrivateLabel(ctx context.Context, issueID domain.CanonicalID, label string) error
-	RemovePrivateLabel(ctx context.Context, issueID domain.CanonicalID, label string) error
-	GetPrivateLabels(ctx context.Context, issueID domain.CanonicalID) ([]string, error)
+	SetAnnotation(ctx context.Context, workItemID domain.WorkItemID, key, value string) error
+	GetAnnotations(ctx context.Context, workItemID domain.WorkItemID) (map[string]string, error)
+	DeleteAnnotation(ctx context.Context, workItemID domain.WorkItemID, key string) error
+	AddPrivateLabel(ctx context.Context, workItemID domain.WorkItemID, label string) error
+	RemovePrivateLabel(ctx context.Context, workItemID domain.WorkItemID, label string) error
+	GetPrivateLabels(ctx context.Context, workItemID domain.WorkItemID) ([]string, error)
 }
 
 type DB interface {
 	EventStore
-	IssueStore
+	WorkItemStore
 	MetaStore
 	SyncStore
 	ActorStore

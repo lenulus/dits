@@ -16,8 +16,8 @@ type SyncRequest struct {
 
 // SyncResponse is returned by the server to the client.
 type SyncResponse struct {
-	Events    []domain.Event                    `json:"events"`
-	SharedIDs map[domain.CanonicalID]domain.SharedID `json:"shared_ids,omitempty"`
-	Heads     []domain.EventID                  `json:"heads"`
-	Meta      *domain.MetaConfig                `json:"meta,omitempty"`
+	Events    []domain.Event                       `json:"events"`
+	SharedIDs map[domain.WorkItemID]domain.SharedID `json:"shared_ids,omitempty"`
+	Heads     []domain.EventID                     `json:"heads"`
+	Meta      *domain.MetaConfig                   `json:"meta,omitempty"`
 }

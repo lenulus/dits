@@ -13,7 +13,6 @@ import (
 )
 
 // Engine handles sync logic for both server and client sides.
-// The same logic applies: ingest foreign events, compute missing events to send back.
 type Engine struct {
 	db     store.DB
 	logger *slog.Logger
@@ -28,11 +27,6 @@ func NewEngineWithLogger(db store.DB, logger *slog.Logger) *Engine {
 }
 
 // HandleSync processes a sync request (server-side).
-// 1. Ingests client events
-// 2. Assigns shared IDs to new issues
-// 3. Rematerializes affected issues
-// 4. Computes events the client is missing
-// 5. Returns response
 func (e *Engine) HandleSync(ctx context.Context, req SyncRequest) (*SyncResponse, error) {
 	// 0. Register actor if public key provided.
 	if req.ActorID != "" && req.PublicKey != "" {
@@ -41,19 +35,19 @@ func (e *Engine) HandleSync(ctx context.Context, req SyncRequest) (*SyncResponse
 		}
 	}
 
-	// 0b. Verify signatures on pushed events (warn mode — don't reject).
+	// 0b. Verify signatures on pushed events (warn mode).
 	if len(req.Events) > 0 {
 		e.verifyEventSignatures(ctx, req.Events)
 	}
 
-	// 1. Ingest client events (INSERT OR IGNORE for idempotency).
+	// 1. Ingest client events.
 	if len(req.Events) > 0 {
 		if err := e.db.AppendEvents(ctx, req.Events); err != nil {
 			return nil, fmt.Errorf("ingesting events: %w", err)
 		}
 	}
 
-	// 1b. Accept client meta if it has a higher version than ours.
+	// 1b. Accept client meta if it has a higher version.
 	meta, err := e.db.GetCurrentMeta(ctx)
 	if err != nil {
 		return nil, err
@@ -71,34 +65,32 @@ func (e *Engine) HandleSync(ctx context.Context, req SyncRequest) (*SyncResponse
 		}
 	}
 
-	// 2. Assign shared IDs to new issues and rematerialize.
-	sharedIDs := make(map[domain.CanonicalID]domain.SharedID)
-	affectedIssues, err := e.db.GetAffectedIssueIDs(ctx, req.Events)
+	// 2. Assign shared IDs to new work items and rematerialize.
+	sharedIDs := make(map[domain.WorkItemID]domain.SharedID)
+	affectedWorkItems, err := e.db.GetAffectedWorkItemIDs(ctx, req.Events)
 	if err != nil {
 		return nil, err
 	}
 
-	for _, issueID := range affectedIssues {
-		if err := e.rematerialize(ctx, issueID); err != nil {
-			return nil, fmt.Errorf("rematerializing %s: %w", issueID, err)
+	for _, wiID := range affectedWorkItems {
+		if err := e.rematerialize(ctx, wiID); err != nil {
+			return nil, fmt.Errorf("rematerializing %s: %w", wiID, err)
 		}
 
-		// Check if issue needs a shared ID.
-		issue, err := e.db.GetIssue(ctx, issueID)
+		wi, err := e.db.GetWorkItem(ctx, wiID)
 		if err != nil {
 			return nil, err
 		}
-		if issue != nil && issue.SharedID == "" && meta != nil {
-			sid, err := e.db.AllocateSharedID(ctx, issueID, meta.ProjectKey)
+		if wi != nil && wi.SharedID == "" && meta != nil {
+			sid, err := e.db.AllocateSharedID(ctx, wiID, meta.ProjectKey)
 			if err != nil {
 				return nil, fmt.Errorf("allocating shared ID: %w", err)
 			}
-			sharedIDs[issueID] = sid
+			sharedIDs[wiID] = sid
 		}
 	}
 
 	// 3. Compute events the client needs.
-	// Walk from our heads backward, stopping at the client's known heads.
 	serverHeads, err := e.db.GetAllHeads(ctx)
 	if err != nil {
 		return nil, err
@@ -109,24 +101,23 @@ func (e *Engine) HandleSync(ctx context.Context, req SyncRequest) (*SyncResponse
 		return nil, fmt.Errorf("finding missing events: %w", err)
 	}
 
-	// 4. Include shared IDs for any issues in the pulled events that the client doesn't know about.
-	pulledIssueIDs, _ := e.db.GetAffectedIssueIDs(ctx, missingEvents)
-	for _, issueID := range pulledIssueIDs {
-		if _, ok := sharedIDs[issueID]; ok {
-			continue // already included from step 2
+	// 4. Include shared IDs for any work items in pulled events.
+	pulledWorkItemIDs, _ := e.db.GetAffectedWorkItemIDs(ctx, missingEvents)
+	for _, wiID := range pulledWorkItemIDs {
+		if _, ok := sharedIDs[wiID]; ok {
+			continue
 		}
-		issue, err := e.db.GetIssue(ctx, issueID)
+		wi, err := e.db.GetWorkItem(ctx, wiID)
 		if err != nil {
 			return nil, err
 		}
-		if issue != nil && issue.SharedID != "" {
-			sharedIDs[issueID] = issue.SharedID
+		if wi != nil && wi.SharedID != "" {
+			sharedIDs[wiID] = wi.SharedID
 		}
 	}
 
-	// 5. Store the client's heads as remote heads for this node.
-	// After sync, the client will have our heads, so store our heads as their known state.
-	newClientHeads := serverHeads // after sync, client will have all our events
+	// 5. Store the client's heads as remote heads.
+	newClientHeads := serverHeads
 
 	resp := &SyncResponse{
 		Events:    missingEvents,
@@ -134,12 +125,10 @@ func (e *Engine) HandleSync(ctx context.Context, req SyncRequest) (*SyncResponse
 		Heads:     serverHeads,
 	}
 
-	// Include meta if client is behind.
 	if meta != nil && req.MetaVersion < meta.Version {
 		resp.Meta = meta
 	}
 
-	// Update stored remote heads for this client.
 	if err := e.db.SetRemoteHeads(ctx, req.NodeID, newClientHeads); err != nil {
 		return nil, err
 	}
@@ -148,10 +137,6 @@ func (e *Engine) HandleSync(ctx context.Context, req SyncRequest) (*SyncResponse
 }
 
 // ApplySync processes a sync response (client-side).
-// 1. Ingests server events
-// 2. Rematerializes affected issues
-// 3. Applies shared IDs
-// 4. Stores server heads
 func (e *Engine) ApplySync(ctx context.Context, resp *SyncResponse, serverNodeID domain.NodeID) error {
 	// 1. Ingest server events.
 	if len(resp.Events) > 0 {
@@ -160,26 +145,26 @@ func (e *Engine) ApplySync(ctx context.Context, resp *SyncResponse, serverNodeID
 		}
 	}
 
-	// 2. Rematerialize affected issues (must happen before shared ID assignment).
-	affectedIssues, err := e.db.GetAffectedIssueIDs(ctx, resp.Events)
+	// 2. Rematerialize affected work items.
+	affectedWorkItems, err := e.db.GetAffectedWorkItemIDs(ctx, resp.Events)
 	if err != nil {
 		return err
 	}
-	for _, issueID := range affectedIssues {
-		if err := e.rematerialize(ctx, issueID); err != nil {
-			return fmt.Errorf("rematerializing %s: %w", issueID, err)
+	for _, wiID := range affectedWorkItems {
+		if err := e.rematerialize(ctx, wiID); err != nil {
+			return fmt.Errorf("rematerializing %s: %w", wiID, err)
 		}
 	}
 
 	// 3. Apply shared IDs from server.
-	for issueID, sharedID := range resp.SharedIDs {
-		issue, err := e.db.GetIssue(ctx, issueID)
+	for wiID, sharedID := range resp.SharedIDs {
+		wi, err := e.db.GetWorkItem(ctx, wiID)
 		if err != nil {
 			return err
 		}
-		if issue != nil && issue.SharedID == "" {
-			issue.SharedID = sharedID
-			if err := e.db.UpsertIssue(ctx, issue); err != nil {
+		if wi != nil && wi.SharedID == "" {
+			wi.SharedID = sharedID
+			if err := e.db.UpsertWorkItem(ctx, wi); err != nil {
 				return err
 			}
 		}
@@ -214,7 +199,6 @@ func (e *Engine) BuildSyncRequest(ctx context.Context, nodeID domain.NodeID, pro
 		return nil, err
 	}
 
-	// Find events to push: events reachable from local heads but not from last-known server heads.
 	remoteHeads, err := e.db.GetRemoteHeads(ctx, serverNodeID)
 	if err != nil {
 		return nil, err
@@ -244,21 +228,17 @@ func (e *Engine) BuildSyncRequest(ctx context.Context, nodeID domain.NodeID, pro
 	}, nil
 }
 
-// findMissingEvents does a BFS backward from `fromHeads` through parent edges,
-// stopping at events in `knownHeads` (or their ancestors). Returns all visited
-// events that are not ancestors of knownHeads.
+// findMissingEvents does a BFS backward from fromHeads, stopping at knownHeads.
 func (e *Engine) findMissingEvents(ctx context.Context, fromHeads, knownHeads []domain.EventID) ([]domain.Event, error) {
 	if len(fromHeads) == 0 {
 		return nil, nil
 	}
 
-	// Build known set from the provided heads.
 	knownSet := make(map[domain.EventID]struct{}, len(knownHeads))
 	for _, h := range knownHeads {
 		knownSet[h] = struct{}{}
 	}
 
-	// BFS from fromHeads backward.
 	visited := make(map[domain.EventID]struct{})
 	queue := make([]domain.EventID, 0, len(fromHeads))
 	var result []domain.Event
@@ -301,9 +281,9 @@ func (e *Engine) findMissingEvents(ctx context.Context, fromHeads, knownHeads []
 	return result, nil
 }
 
-// rematerialize re-reduces all events for an issue and upserts the result.
-func (e *Engine) rematerialize(ctx context.Context, issueID domain.CanonicalID) error {
-	events, err := e.db.GetEventsForIssue(ctx, issueID)
+// rematerialize re-reduces all events for a work item and upserts the result.
+func (e *Engine) rematerialize(ctx context.Context, workItemID domain.WorkItemID) error {
+	events, err := e.db.GetEventsForWorkItem(ctx, workItemID)
 	if err != nil {
 		return err
 	}
@@ -312,24 +292,24 @@ func (e *Engine) rematerialize(ctx context.Context, issueID domain.CanonicalID) 
 	}
 
 	ordered := domain.CausalOrder(events)
-	issue, err := domain.Reduce(ordered)
+	wi, err := domain.Reduce(ordered)
 	if err != nil {
 		return err
 	}
 
 	// Preserve existing shared ID.
-	existing, err := e.db.GetIssue(ctx, issueID)
+	existing, err := e.db.GetWorkItem(ctx, workItemID)
 	if err != nil {
 		return err
 	}
 	if existing != nil && existing.SharedID != "" {
-		issue.SharedID = existing.SharedID
+		wi.SharedID = existing.SharedID
 	}
 
-	return e.db.UpsertIssue(ctx, issue)
+	return e.db.UpsertWorkItem(ctx, wi)
 }
 
-// verifyEventSignatures checks signatures on events in warn mode (logs warnings, doesn't reject).
+// verifyEventSignatures checks signatures in warn mode.
 func (e *Engine) verifyEventSignatures(ctx context.Context, events []domain.Event) {
 	for _, evt := range events {
 		if len(evt.Signature) == 0 {

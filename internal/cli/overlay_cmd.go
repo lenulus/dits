@@ -8,7 +8,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// --- Annotations (key-value notes on issues, local only) ---
+// --- Annotations (key-value notes on work items, local only) ---
 
 var issueAnnotateCmd = &cobra.Command{
 	Use:   "annotate <issue-id> <key> <value>",
@@ -22,15 +22,15 @@ var issueAnnotateCmd = &cobra.Command{
 		defer proj.DB.Close()
 
 		ctx := context.Background()
-		issue, err := resolveIssue(ctx, proj, args[0])
+		wi, err := resolveWorkItem(ctx, proj, args[0])
 		if err != nil {
 			return err
 		}
 
-		if err := proj.DB.SetAnnotation(ctx, issue.ID, args[1], args[2]); err != nil {
+		if err := proj.DB.SetAnnotation(ctx, wi.ID, args[1], args[2]); err != nil {
 			return err
 		}
-		fmt.Printf("Set annotation %s=%s on %s (local only)\n", args[1], args[2], issueDisplayID(issue))
+		fmt.Printf("Set annotation %s=%s on %s (local only)\n", args[1], args[2], workItemDisplayID(wi))
 		return nil
 	},
 }
@@ -47,12 +47,12 @@ var issueAnnotationsCmd = &cobra.Command{
 		defer proj.DB.Close()
 
 		ctx := context.Background()
-		issue, err := resolveIssue(ctx, proj, args[0])
+		wi, err := resolveWorkItem(ctx, proj, args[0])
 		if err != nil {
 			return err
 		}
 
-		annotations, err := proj.DB.GetAnnotations(ctx, issue.ID)
+		annotations, err := proj.DB.GetAnnotations(ctx, wi.ID)
 		if err != nil {
 			return err
 		}
@@ -85,15 +85,15 @@ var issueAnnotateDeleteCmd = &cobra.Command{
 		defer proj.DB.Close()
 
 		ctx := context.Background()
-		issue, err := resolveIssue(ctx, proj, args[0])
+		wi, err := resolveWorkItem(ctx, proj, args[0])
 		if err != nil {
 			return err
 		}
 
-		if err := proj.DB.DeleteAnnotation(ctx, issue.ID, args[1]); err != nil {
+		if err := proj.DB.DeleteAnnotation(ctx, wi.ID, args[1]); err != nil {
 			return err
 		}
-		fmt.Printf("Deleted annotation %q on %s\n", args[1], issueDisplayID(issue))
+		fmt.Printf("Deleted annotation %q on %s\n", args[1], workItemDisplayID(wi))
 		return nil
 	},
 }
@@ -112,15 +112,15 @@ var issuePrivateLabelAddCmd = &cobra.Command{
 		defer proj.DB.Close()
 
 		ctx := context.Background()
-		issue, err := resolveIssue(ctx, proj, args[0])
+		wi, err := resolveWorkItem(ctx, proj, args[0])
 		if err != nil {
 			return err
 		}
 
-		if err := proj.DB.AddPrivateLabel(ctx, issue.ID, args[1]); err != nil {
+		if err := proj.DB.AddPrivateLabel(ctx, wi.ID, args[1]); err != nil {
 			return err
 		}
-		fmt.Printf("Added private label %q to %s (local only)\n", args[1], issueDisplayID(issue))
+		fmt.Printf("Added private label %q to %s (local only)\n", args[1], workItemDisplayID(wi))
 		return nil
 	},
 }
@@ -137,15 +137,15 @@ var issuePrivateLabelRemoveCmd = &cobra.Command{
 		defer proj.DB.Close()
 
 		ctx := context.Background()
-		issue, err := resolveIssue(ctx, proj, args[0])
+		wi, err := resolveWorkItem(ctx, proj, args[0])
 		if err != nil {
 			return err
 		}
 
-		if err := proj.DB.RemovePrivateLabel(ctx, issue.ID, args[1]); err != nil {
+		if err := proj.DB.RemovePrivateLabel(ctx, wi.ID, args[1]); err != nil {
 			return err
 		}
-		fmt.Printf("Removed private label %q from %s\n", args[1], issueDisplayID(issue))
+		fmt.Printf("Removed private label %q from %s\n", args[1], workItemDisplayID(wi))
 		return nil
 	},
 }

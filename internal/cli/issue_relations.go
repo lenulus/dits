@@ -26,39 +26,39 @@ var issueLinkCmd = &cobra.Command{
 			return err
 		}
 
-		issue, err := resolveIssue(ctx, proj, args[0])
+		wi, err := resolveWorkItem(ctx, proj, args[0])
 		if err != nil {
 			return err
 		}
-		target, err := resolveIssue(ctx, proj, args[2])
+		target, err := resolveWorkItem(ctx, proj, args[2])
 		if err != nil {
-			return fmt.Errorf("target issue: %w", err)
+			return fmt.Errorf("target work item: %w", err)
 		}
 
-		heads, err := proj.DB.GetHeads(ctx, issue.ID)
+		heads, err := proj.DB.GetHeads(ctx, wi.ID)
 		if err != nil {
 			return err
 		}
 
 		event := domain.Event{
 			ID:             domain.NewEventID(),
-			IssueID:        issue.ID,
-			Type:           domain.EventIssueLinked,
+			WorkItemID:     wi.ID,
+			Type:           domain.EventWorkLinked,
 			ParentEventIDs: heads,
 			MetaVersion:    meta.Version,
 			ActorID:        proj.Config.ActorID,
 			Timestamp:      time.Now().UTC(),
 			Payload: domain.MustMarshalPayload(domain.RelationPayload{
-				RelationType: args[1],
-				TargetIssue:  target.ID,
+				RelationType:   args[1],
+				TargetWorkItem: target.ID,
 			}),
 		}
 
-		if err := appendAndMaterialize(ctx, proj, issue.ID, event); err != nil {
+		if err := appendAndMaterialize(ctx, proj, wi.ID, event); err != nil {
 			return err
 		}
 
-		fmt.Printf("%s %s %s\n", issueDisplayID(issue), args[1], issueDisplayID(target))
+		fmt.Printf("%s %s %s\n", workItemDisplayID(wi), args[1], workItemDisplayID(target))
 		return nil
 	},
 }
@@ -80,39 +80,39 @@ var issueUnlinkCmd = &cobra.Command{
 			return err
 		}
 
-		issue, err := resolveIssue(ctx, proj, args[0])
+		wi, err := resolveWorkItem(ctx, proj, args[0])
 		if err != nil {
 			return err
 		}
-		target, err := resolveIssue(ctx, proj, args[2])
+		target, err := resolveWorkItem(ctx, proj, args[2])
 		if err != nil {
-			return fmt.Errorf("target issue: %w", err)
+			return fmt.Errorf("target work item: %w", err)
 		}
 
-		heads, err := proj.DB.GetHeads(ctx, issue.ID)
+		heads, err := proj.DB.GetHeads(ctx, wi.ID)
 		if err != nil {
 			return err
 		}
 
 		event := domain.Event{
 			ID:             domain.NewEventID(),
-			IssueID:        issue.ID,
-			Type:           domain.EventIssueUnlinked,
+			WorkItemID:     wi.ID,
+			Type:           domain.EventWorkUnlinked,
 			ParentEventIDs: heads,
 			MetaVersion:    meta.Version,
 			ActorID:        proj.Config.ActorID,
 			Timestamp:      time.Now().UTC(),
 			Payload: domain.MustMarshalPayload(domain.RelationPayload{
-				RelationType: args[1],
-				TargetIssue:  target.ID,
+				RelationType:   args[1],
+				TargetWorkItem: target.ID,
 			}),
 		}
 
-		if err := appendAndMaterialize(ctx, proj, issue.ID, event); err != nil {
+		if err := appendAndMaterialize(ctx, proj, wi.ID, event); err != nil {
 			return err
 		}
 
-		fmt.Printf("Unlinked %s %s %s\n", issueDisplayID(issue), args[1], issueDisplayID(target))
+		fmt.Printf("Unlinked %s %s %s\n", workItemDisplayID(wi), args[1], workItemDisplayID(target))
 		return nil
 	},
 }
@@ -134,20 +134,20 @@ var issueAssignCmd = &cobra.Command{
 			return err
 		}
 
-		issue, err := resolveIssue(ctx, proj, args[0])
+		wi, err := resolveWorkItem(ctx, proj, args[0])
 		if err != nil {
 			return err
 		}
 
-		heads, err := proj.DB.GetHeads(ctx, issue.ID)
+		heads, err := proj.DB.GetHeads(ctx, wi.ID)
 		if err != nil {
 			return err
 		}
 
 		event := domain.Event{
 			ID:             domain.NewEventID(),
-			IssueID:        issue.ID,
-			Type:           domain.EventIssueAssigned,
+			WorkItemID:     wi.ID,
+			Type:           domain.EventWorkAssigned,
 			ParentEventIDs: heads,
 			MetaVersion:    meta.Version,
 			ActorID:        proj.Config.ActorID,
@@ -155,11 +155,11 @@ var issueAssignCmd = &cobra.Command{
 			Payload:        domain.MustMarshalPayload(domain.AssignPayload{Assignee: domain.ActorID(args[1])}),
 		}
 
-		if err := appendAndMaterialize(ctx, proj, issue.ID, event); err != nil {
+		if err := appendAndMaterialize(ctx, proj, wi.ID, event); err != nil {
 			return err
 		}
 
-		fmt.Printf("Assigned %s to %s\n", issueDisplayID(issue), args[1])
+		fmt.Printf("Assigned %s to %s\n", workItemDisplayID(wi), args[1])
 		return nil
 	},
 }
@@ -181,20 +181,20 @@ var issueUnassignCmd = &cobra.Command{
 			return err
 		}
 
-		issue, err := resolveIssue(ctx, proj, args[0])
+		wi, err := resolveWorkItem(ctx, proj, args[0])
 		if err != nil {
 			return err
 		}
 
-		heads, err := proj.DB.GetHeads(ctx, issue.ID)
+		heads, err := proj.DB.GetHeads(ctx, wi.ID)
 		if err != nil {
 			return err
 		}
 
 		event := domain.Event{
 			ID:             domain.NewEventID(),
-			IssueID:        issue.ID,
-			Type:           domain.EventIssueUnassigned,
+			WorkItemID:     wi.ID,
+			Type:           domain.EventWorkUnassigned,
 			ParentEventIDs: heads,
 			MetaVersion:    meta.Version,
 			ActorID:        proj.Config.ActorID,
@@ -202,11 +202,11 @@ var issueUnassignCmd = &cobra.Command{
 			Payload:        domain.MustMarshalPayload(domain.AssignPayload{Assignee: domain.ActorID(args[1])}),
 		}
 
-		if err := appendAndMaterialize(ctx, proj, issue.ID, event); err != nil {
+		if err := appendAndMaterialize(ctx, proj, wi.ID, event); err != nil {
 			return err
 		}
 
-		fmt.Printf("Unassigned %s from %s\n", args[1], issueDisplayID(issue))
+		fmt.Printf("Unassigned %s from %s\n", args[1], workItemDisplayID(wi))
 		return nil
 	},
 }

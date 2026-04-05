@@ -26,20 +26,20 @@ var issueLabelAddCmd = &cobra.Command{
 			return err
 		}
 
-		issue, err := resolveIssue(ctx, proj, args[0])
+		wi, err := resolveWorkItem(ctx, proj, args[0])
 		if err != nil {
 			return err
 		}
 
-		heads, err := proj.DB.GetHeads(ctx, issue.ID)
+		heads, err := proj.DB.GetHeads(ctx, wi.ID)
 		if err != nil {
 			return err
 		}
 
 		event := domain.Event{
 			ID:             domain.NewEventID(),
-			IssueID:        issue.ID,
-			Type:           domain.EventIssueLabelAdded,
+			WorkItemID:     wi.ID,
+			Type:           domain.EventWorkLabelAdded,
 			ParentEventIDs: heads,
 			MetaVersion:    meta.Version,
 			ActorID:        proj.Config.ActorID,
@@ -51,11 +51,11 @@ var issueLabelAddCmd = &cobra.Command{
 			return fmt.Errorf("validation: %w", err)
 		}
 
-		if err := appendAndMaterialize(ctx, proj, issue.ID, event); err != nil {
+		if err := appendAndMaterialize(ctx, proj, wi.ID, event); err != nil {
 			return err
 		}
 
-		fmt.Printf("Added label %q to %s\n", args[1], issueDisplayID(issue))
+		fmt.Printf("Added label %q to %s\n", args[1], workItemDisplayID(wi))
 		return nil
 	},
 }
@@ -72,12 +72,12 @@ var issueLabelRemoveCmd = &cobra.Command{
 		defer proj.DB.Close()
 
 		ctx := context.Background()
-		issue, err := resolveIssue(ctx, proj, args[0])
+		wi, err := resolveWorkItem(ctx, proj, args[0])
 		if err != nil {
 			return err
 		}
 
-		heads, err := proj.DB.GetHeads(ctx, issue.ID)
+		heads, err := proj.DB.GetHeads(ctx, wi.ID)
 		if err != nil {
 			return err
 		}
@@ -89,8 +89,8 @@ var issueLabelRemoveCmd = &cobra.Command{
 
 		event := domain.Event{
 			ID:             domain.NewEventID(),
-			IssueID:        issue.ID,
-			Type:           domain.EventIssueLabelRemoved,
+			WorkItemID:     wi.ID,
+			Type:           domain.EventWorkLabelRemoved,
 			ParentEventIDs: heads,
 			MetaVersion:    meta.Version,
 			ActorID:        proj.Config.ActorID,
@@ -98,11 +98,11 @@ var issueLabelRemoveCmd = &cobra.Command{
 			Payload:        domain.MustMarshalPayload(domain.LabelPayload{LabelSlug: args[1]}),
 		}
 
-		if err := appendAndMaterialize(ctx, proj, issue.ID, event); err != nil {
+		if err := appendAndMaterialize(ctx, proj, wi.ID, event); err != nil {
 			return err
 		}
 
-		fmt.Printf("Removed label %q from %s\n", args[1], issueDisplayID(issue))
+		fmt.Printf("Removed label %q from %s\n", args[1], workItemDisplayID(wi))
 		return nil
 	},
 }
@@ -124,26 +124,26 @@ var issueStatusCmd = &cobra.Command{
 			return err
 		}
 
-		issue, err := resolveIssue(ctx, proj, args[0])
+		wi, err := resolveWorkItem(ctx, proj, args[0])
 		if err != nil {
 			return err
 		}
 
-		heads, err := proj.DB.GetHeads(ctx, issue.ID)
+		heads, err := proj.DB.GetHeads(ctx, wi.ID)
 		if err != nil {
 			return err
 		}
 
 		event := domain.Event{
 			ID:             domain.NewEventID(),
-			IssueID:        issue.ID,
-			Type:           domain.EventIssueStatusSet,
+			WorkItemID:     wi.ID,
+			Type:           domain.EventWorkStatusSet,
 			ParentEventIDs: heads,
 			MetaVersion:    meta.Version,
 			ActorID:        proj.Config.ActorID,
 			Timestamp:      time.Now().UTC(),
 			Payload: domain.MustMarshalPayload(domain.StatusSetPayload{
-				From: issue.Status,
+				From: wi.Status,
 				To:   args[1],
 			}),
 		}
@@ -152,20 +152,20 @@ var issueStatusCmd = &cobra.Command{
 			return fmt.Errorf("validation: %w", err)
 		}
 
-		if err := appendAndMaterialize(ctx, proj, issue.ID, event); err != nil {
+		if err := appendAndMaterialize(ctx, proj, wi.ID, event); err != nil {
 			return err
 		}
 
-		fmt.Printf("Status changed: %s -> %s on %s\n", issue.Status, args[1], issueDisplayID(issue))
+		fmt.Printf("Status changed: %s -> %s on %s\n", wi.Status, args[1], workItemDisplayID(wi))
 		return nil
 	},
 }
 
-func issueDisplayID(issue *domain.Issue) string {
-	if issue.SharedID != "" {
-		return string(issue.SharedID)
+func workItemDisplayID(wi *domain.WorkItem) string {
+	if wi.SharedID != "" {
+		return string(wi.SharedID)
 	}
-	return string(issue.ID)
+	return string(wi.ID)
 }
 
 func init() {

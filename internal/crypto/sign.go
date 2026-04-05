@@ -35,16 +35,19 @@ func VerifyEvent(e *domain.Event, pubKey ed25519.PublicKey) (bool, error) {
 // CanonicalEventJSON produces a deterministic JSON representation of an event
 // for signing/verification. Excludes the signature field, sorts keys.
 func CanonicalEventJSON(e *domain.Event) ([]byte, error) {
-	// Build a map with sorted keys, excluding signature.
 	m := map[string]any{
 		"actor_id":         string(e.ActorID),
 		"event_type":       string(e.Type),
 		"id":               string(e.ID),
-		"issue_id":         string(e.IssueID),
+		"work_item_id":     string(e.WorkItemID),
 		"meta_version":     e.MetaVersion,
 		"parent_event_ids": e.ParentEventIDs,
 		"payload":          json.RawMessage(e.Payload),
 		"timestamp":        e.Timestamp.UTC().Format("2006-01-02T15:04:05.999999999Z"),
+	}
+
+	if e.EmittedBy != nil {
+		m["emitted_by"] = e.EmittedBy
 	}
 
 	// Sort keys for deterministic output.

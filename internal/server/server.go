@@ -44,8 +44,8 @@ func New(db store.DB, blobs blob.Store, logger *slog.Logger) *Server {
 	r.Get("/api/v1/blobs/{hash}", s.handleBlobDownload)
 
 	// Query API
-	r.Get("/api/v1/issues", s.handleListIssues)
-	r.Get("/api/v1/issues/{id}", s.handleGetIssue)
+	r.Get("/api/v1/work", s.handleListWorkItems)
+	r.Get("/api/v1/work/{id}", s.handleGetWorkItem)
 	r.Get("/api/v1/meta", s.handleGetMeta)
 
 	s.router = r
@@ -144,7 +144,6 @@ func (s *Server) handleBlobUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Enforce size limit.
 	r.Body = http.MaxBytesReader(w, r.Body, blob.MaxBlobSize+1)
 
 	if err := s.blobs.Put(r.Context(), hash, r.Body); err != nil {
@@ -178,11 +177,14 @@ func (s *Server) handleBlobDownload(w http.ResponseWriter, r *http.Request) {
 
 // --- Query API ---
 
-func (s *Server) handleListIssues(w http.ResponseWriter, r *http.Request) {
-	filter := store.IssueFilter{}
+func (s *Server) handleListWorkItems(w http.ResponseWriter, r *http.Request) {
+	filter := store.WorkItemFilter{}
 
 	if v := r.URL.Query().Get("status"); v != "" {
 		filter.Status = v
+	}
+	if v := r.URL.Query().Get("kind"); v != "" {
+		filter.Kind = v
 	}
 	if v := r.URL.Query().Get("label"); v != "" {
 		filter.Label = v
@@ -191,68 +193,70 @@ func (s *Server) handleListIssues(w http.ResponseWriter, r *http.Request) {
 		filter.Query = v
 	}
 
-	issues, err := s.db.ListIssues(r.Context(), filter)
+	items, err := s.db.ListWorkItems(r.Context(), filter)
 	if err != nil {
-		s.jsonError(w, fmt.Sprintf("listing issues: %v", err), http.StatusInternalServerError)
+		s.jsonError(w, fmt.Sprintf("listing work items: %v", err), http.StatusInternalServerError)
 		return
 	}
 
-	type issueJSON struct {
+	type workItemJSON struct {
 		ID        string   `json:"id"`
 		SharedID  string   `json:"shared_id,omitempty"`
+		Kind      string   `json:"kind"`
 		Title     string   `json:"title"`
 		Status    string   `json:"status"`
-		Type      string   `json:"type"`
 		Priority  string   `json:"priority"`
 		Labels    []string `json:"labels"`
+		Blocked   bool     `json:"blocked,omitempty"`
 		CreatedBy string   `json:"created_by"`
 		CreatedAt string   `json:"created_at"`
 		UpdatedAt string   `json:"updated_at"`
 	}
 
-	result := make([]issueJSON, 0, len(issues))
-	for _, iss := range issues {
-		result = append(result, issueJSON{
-			ID:        string(iss.ID),
-			SharedID:  string(iss.SharedID),
-			Title:     iss.Title,
-			Status:    iss.Status,
-			Type:      iss.TypeSlug,
-			Priority:  iss.Priority,
-			Labels:    iss.Labels,
-			CreatedBy: string(iss.CreatedBy),
-			CreatedAt: iss.CreatedAt.Format("2006-01-02T15:04:05Z"),
-			UpdatedAt: iss.UpdatedAt.Format("2006-01-02T15:04:05Z"),
+	result := make([]workItemJSON, 0, len(items))
+	for _, wi := range items {
+		result = append(result, workItemJSON{
+			ID:        string(wi.ID),
+			SharedID:  string(wi.SharedID),
+			Kind:      wi.Kind,
+			Title:     wi.Title,
+			Status:    wi.Status,
+			Priority:  wi.Priority,
+			Labels:    wi.Labels,
+			Blocked:   wi.Blocked,
+			CreatedBy: string(wi.CreatedBy),
+			CreatedAt: wi.CreatedAt.Format("2006-01-02T15:04:05Z"),
+			UpdatedAt: wi.UpdatedAt.Format("2006-01-02T15:04:05Z"),
 		})
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{"issues": result, "count": len(result)})
+	json.NewEncoder(w).Encode(map[string]any{"work_items": result, "count": len(result)})
 }
 
-func (s *Server) handleGetIssue(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleGetWorkItem(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 
 	// Try shared ID first, then canonical.
-	issue, err := s.db.GetIssueBySharedID(r.Context(), domain.SharedID(id))
+	wi, err := s.db.GetWorkItemBySharedID(r.Context(), domain.SharedID(id))
 	if err != nil {
 		s.jsonError(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	if issue == nil {
-		issue, err = s.db.GetIssue(r.Context(), domain.CanonicalID(id))
+	if wi == nil {
+		wi, err = s.db.GetWorkItem(r.Context(), domain.WorkItemID(id))
 		if err != nil {
 			s.jsonError(w, "internal error", http.StatusInternalServerError)
 			return
 		}
 	}
-	if issue == nil {
-		s.jsonError(w, "issue not found", http.StatusNotFound)
+	if wi == nil {
+		s.jsonError(w, "work item not found", http.StatusNotFound)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(issue)
+	json.NewEncoder(w).Encode(wi)
 }
 
 func (s *Server) handleGetMeta(w http.ResponseWriter, r *http.Request) {

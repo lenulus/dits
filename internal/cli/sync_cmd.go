@@ -80,7 +80,7 @@ var syncCmd = &cobra.Command{
 		}
 
 		// Sync blobs: upload local blobs the server is missing.
-		pushedHashes := collectAttachmentHashes(req.Events)
+		pushedHashes := collectArtifactHashes(req.Events)
 		if len(pushedHashes) > 0 {
 			missing, err := checkMissingBlobs(ctx, serverURL, pushedHashes)
 			if err != nil {
@@ -104,7 +104,7 @@ var syncCmd = &cobra.Command{
 		}
 
 		// Sync blobs: download blobs from pulled events we don't have locally.
-		pulledHashes := collectAttachmentHashes(resp.Events)
+		pulledHashes := collectArtifactHashes(resp.Events)
 		if len(pulledHashes) > 0 {
 			var needed []string
 			for _, h := range pulledHashes {
@@ -181,12 +181,21 @@ func init() {
 
 // --- Blob sync helpers ---
 
-func collectAttachmentHashes(events []domain.Event) []string {
+func collectArtifactHashes(events []domain.Event) []string {
 	seen := make(map[string]struct{})
 	var hashes []string
 	for _, e := range events {
-		if e.Type == domain.EventAttachmentAdded {
-			var p domain.AttachmentAddedPayload
+		switch e.Type {
+		case domain.EventWorkArtifactAdded:
+			var p domain.ArtifactAddedPayload
+			if err := json.Unmarshal(e.Payload, &p); err == nil {
+				if _, ok := seen[p.ContentHash]; !ok {
+					seen[p.ContentHash] = struct{}{}
+					hashes = append(hashes, p.ContentHash)
+				}
+			}
+		case domain.EventWorkEvidenceAttached:
+			var p domain.EvidenceAttachedPayload
 			if err := json.Unmarshal(e.Payload, &p); err == nil {
 				if _, ok := seen[p.ContentHash]; !ok {
 					seen[p.ContentHash] = struct{}{}

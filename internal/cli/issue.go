@@ -30,7 +30,7 @@ var issueCreateCmd = &cobra.Command{
 		title, _ := cmd.Flags().GetString("title")
 		body, _ := cmd.Flags().GetString("body")
 		labels, _ := cmd.Flags().GetStringSlice("label")
-		issueType, _ := cmd.Flags().GetString("type")
+		kind, _ := cmd.Flags().GetString("type")
 		if title == "" {
 			return fmt.Errorf("--title is required")
 		}
@@ -47,22 +47,22 @@ var issueCreateCmd = &cobra.Command{
 			return err
 		}
 
-		if issueType == "" {
-			issueType = "task"
+		if kind == "" {
+			kind = "task"
 		}
 
-		issueID := domain.NewCanonicalID()
+		workItemID := domain.NewWorkItemID()
 		now := time.Now().UTC()
 
 		event := domain.Event{
 			ID:             domain.NewEventID(),
-			IssueID:        issueID,
-			Type:           domain.EventIssueCreated,
+			WorkItemID:     workItemID,
+			Type:           domain.EventWorkCreated,
 			ParentEventIDs: nil,
 			MetaVersion:    meta.Version,
 			ActorID:        proj.Config.ActorID,
 			Timestamp:      now,
-			Payload:        domain.MustMarshalPayload(domain.IssueCreatedPayload{Title: title, Body: body, TypeSlug: issueType}),
+			Payload:        domain.MustMarshalPayload(domain.WorkCreatedPayload{Title: title, Body: body, Kind: kind}),
 		}
 
 		if err := domain.ValidateEvent(event, meta); err != nil {
@@ -78,11 +78,11 @@ var issueCreateCmd = &cobra.Command{
 
 		// Add label events if specified.
 		for _, l := range labels {
-			heads, _ := proj.DB.GetHeads(ctx, issueID)
+			heads, _ := proj.DB.GetHeads(ctx, workItemID)
 			labelEvt := domain.Event{
 				ID:             domain.NewEventID(),
-				IssueID:        issueID,
-				Type:           domain.EventIssueLabelAdded,
+				WorkItemID:     workItemID,
+				Type:           domain.EventWorkLabelAdded,
 				ParentEventIDs: heads,
 				MetaVersion:    meta.Version,
 				ActorID:        proj.Config.ActorID,
@@ -101,34 +101,34 @@ var issueCreateCmd = &cobra.Command{
 		}
 
 		// Materialize.
-		events, err := proj.DB.GetEventsForIssue(ctx, issueID)
+		events, err := proj.DB.GetEventsForWorkItem(ctx, workItemID)
 		if err != nil {
 			return err
 		}
 		ordered := domain.CausalOrder(events)
-		issue, err := domain.Reduce(ordered)
+		wi, err := domain.Reduce(ordered)
 		if err != nil {
 			return err
 		}
 
-		if err := proj.DB.UpsertIssue(ctx, issue); err != nil {
+		if err := proj.DB.UpsertWorkItem(ctx, wi); err != nil {
 			return err
 		}
 
 		// Allocate shared ID.
-		sharedID, err := proj.DB.AllocateSharedID(ctx, issueID, proj.Config.ProjectKey)
+		sharedID, err := proj.DB.AllocateSharedID(ctx, workItemID, proj.Config.ProjectKey)
 		if err != nil {
 			return fmt.Errorf("allocating shared ID: %w", err)
 		}
 
-		fmt.Printf("Created %s (%s): %s\n", sharedID, issueID, title)
+		fmt.Printf("Created %s (%s): %s\n", sharedID, workItemID, title)
 		return nil
 	},
 }
 
 var issueListCmd = &cobra.Command{
-	Use:   "list",
-	Short: "List issues",
+	Use:     "list",
+	Short:   "List issues",
 	Aliases: []string{"ls"},
 	RunE: func(cmd *cobra.Command, args []string) error {
 		proj, err := loadProject()
@@ -140,21 +140,18 @@ var issueListCmd = &cobra.Command{
 		status, _ := cmd.Flags().GetString("status")
 		all, _ := cmd.Flags().GetBool("all")
 
-		filter := store.IssueFilter{}
-		if !all && status == "" {
-			// Default: show non-closed
-			filter.Status = "" // we'll handle this below
-		} else if status != "" {
+		filter := store.WorkItemFilter{}
+		if status != "" {
 			filter.Status = status
 		}
 
 		ctx := context.Background()
-		issues, err := proj.DB.ListIssues(ctx, filter)
+		items, err := proj.DB.ListWorkItems(ctx, filter)
 		if err != nil {
 			return err
 		}
 
-		if len(issues) == 0 {
+		if len(items) == 0 {
 			if !jsonOutput(cmd) {
 				fmt.Println("No issues found.")
 			} else {
@@ -165,25 +162,25 @@ var issueListCmd = &cobra.Command{
 
 		// Filter closed if not --all.
 		if !all {
-			var filtered []domain.Issue
-			for _, iss := range issues {
-				if iss.Status != "closed" {
-					filtered = append(filtered, iss)
+			var filtered []domain.WorkItem
+			for _, wi := range items {
+				if wi.Status != "closed" {
+					filtered = append(filtered, wi)
 				}
 			}
-			issues = filtered
+			items = filtered
 		}
 
 		if jsonOutput(cmd) {
-			return printJSON(issues)
+			return printJSON(items)
 		}
 
-		for _, iss := range issues {
-			id := string(iss.SharedID)
+		for _, wi := range items {
+			id := string(wi.SharedID)
 			if id == "" {
-				id = string(iss.ID)
+				id = string(wi.ID)
 			}
-			fmt.Printf("%-12s %-12s %s\n", id, iss.Status, iss.Title)
+			fmt.Printf("%-12s %-12s %s\n", id, wi.Status, wi.Title)
 		}
 		return nil
 	},
@@ -201,66 +198,80 @@ var issueShowCmd = &cobra.Command{
 		defer proj.DB.Close()
 
 		ctx := context.Background()
-		issue, err := resolveIssue(ctx, proj, args[0])
+		wi, err := resolveWorkItem(ctx, proj, args[0])
 		if err != nil {
 			return err
 		}
 
 		if jsonOutput(cmd) {
-			return printJSON(issue)
+			return printJSON(wi)
 		}
 
-		id := string(issue.SharedID)
+		id := string(wi.SharedID)
 		if id == "" {
-			id = string(issue.ID)
+			id = string(wi.ID)
 		}
 
 		fmt.Printf("Issue:    %s\n", id)
-		fmt.Printf("ID:       %s\n", issue.ID)
-		fmt.Printf("Title:    %s\n", issue.Title)
-		fmt.Printf("Status:   %s\n", issue.Status)
-		fmt.Printf("Type:     %s\n", issue.TypeSlug)
-		fmt.Printf("Priority: %s\n", issue.Priority)
-		fmt.Printf("Created:  %s by %s\n", issue.CreatedAt.Format(time.RFC3339), issue.CreatedBy)
-		fmt.Printf("Updated:  %s\n", issue.UpdatedAt.Format(time.RFC3339))
+		fmt.Printf("ID:       %s\n", wi.ID)
+		fmt.Printf("Title:    %s\n", wi.Title)
+		fmt.Printf("Kind:     %s\n", wi.Kind)
+		fmt.Printf("Status:   %s\n", wi.Status)
+		fmt.Printf("Priority: %s\n", wi.Priority)
+		fmt.Printf("Created:  %s by %s\n", wi.CreatedAt.Format(time.RFC3339), wi.CreatedBy)
+		fmt.Printf("Updated:  %s\n", wi.UpdatedAt.Format(time.RFC3339))
 
-		if len(issue.Labels) > 0 {
-			fmt.Printf("Labels:   %s\n", strings.Join(issue.Labels, ", "))
+		if wi.Blocked {
+			fmt.Printf("Blocked:  %s\n", wi.BlockedReason)
 		}
-		if len(issue.Assignees) > 0 {
-			assignees := make([]string, len(issue.Assignees))
-			for i, a := range issue.Assignees {
+		if wi.LeaseHolder != nil {
+			fmt.Printf("Leased:   %s\n", *wi.LeaseHolder)
+		}
+
+		if len(wi.Labels) > 0 {
+			fmt.Printf("Labels:   %s\n", strings.Join(wi.Labels, ", "))
+		}
+		if len(wi.Assignees) > 0 {
+			assignees := make([]string, len(wi.Assignees))
+			for i, a := range wi.Assignees {
 				assignees[i] = string(a)
 			}
 			fmt.Printf("Assigned: %s\n", strings.Join(assignees, ", "))
 		}
-		if len(issue.Relations) > 0 {
+		if len(wi.Relations) > 0 {
 			fmt.Println("\nRelations:")
-			for _, r := range issue.Relations {
-				fmt.Printf("  %s %s\n", r.Type, r.TargetIssue)
+			for _, r := range wi.Relations {
+				fmt.Printf("  %s %s\n", r.Type, r.TargetWorkItem)
 			}
 		}
-		if issue.Body != "" {
-			fmt.Printf("\n%s\n", issue.Body)
+		if wi.Body != "" {
+			fmt.Printf("\n%s\n", wi.Body)
 		}
 
-		if len(issue.Attachments) > 0 {
-			fmt.Printf("\n--- Attachments (%d) ---\n", len(issue.Attachments))
-			for _, a := range issue.Attachments {
+		if len(wi.Artifacts) > 0 {
+			fmt.Printf("\n--- Artifacts (%d) ---\n", len(wi.Artifacts))
+			for _, a := range wi.Artifacts {
 				fmt.Printf("  %s  %s  (%d bytes)  %s\n", a.ID, a.Filename, a.SizeBytes, a.ContentHash)
 			}
 		}
 
-		if len(issue.Comments) > 0 {
-			fmt.Printf("\n--- Comments (%d) ---\n", len(issue.Comments))
-			for _, c := range issue.Comments {
+		if len(wi.Attempts) > 0 {
+			fmt.Printf("\n--- Attempts (%d) ---\n", len(wi.Attempts))
+			for _, a := range wi.Attempts {
+				fmt.Printf("  #%d %s  %s  %s\n", a.Number, a.AttemptID, a.Status, a.StartedAt.Format(time.RFC3339))
+			}
+		}
+
+		if len(wi.Comments) > 0 {
+			fmt.Printf("\n--- Comments (%d) ---\n", len(wi.Comments))
+			for _, c := range wi.Comments {
 				fmt.Printf("\n[%s] %s:\n%s\n", c.Timestamp.Format(time.RFC3339), c.ActorID, c.Body)
 			}
 		}
 
 		// Overlay data (local only).
-		privateLabels, _ := proj.DB.GetPrivateLabels(ctx, issue.ID)
-		annotations, _ := proj.DB.GetAnnotations(ctx, issue.ID)
+		privateLabels, _ := proj.DB.GetPrivateLabels(ctx, wi.ID)
+		annotations, _ := proj.DB.GetAnnotations(ctx, wi.ID)
 		if len(privateLabels) > 0 || len(annotations) > 0 {
 			fmt.Printf("\n--- Local (not synced) ---\n")
 			if len(privateLabels) > 0 {
@@ -295,27 +306,27 @@ var issueCommentCmd = &cobra.Command{
 		defer proj.DB.Close()
 
 		ctx := context.Background()
-		issue, err := resolveIssue(ctx, proj, args[0])
+		wi, err := resolveWorkItem(ctx, proj, args[0])
 		if err != nil {
 			return err
 		}
 
-		heads, err := proj.DB.GetHeads(ctx, issue.ID)
+		heads, err := proj.DB.GetHeads(ctx, wi.ID)
 		if err != nil {
 			return err
 		}
 
 		event := domain.Event{
 			ID:             domain.NewEventID(),
-			IssueID:        issue.ID,
-			Type:           domain.EventIssueCommented,
+			WorkItemID:     wi.ID,
+			Type:           domain.EventWorkCommented,
 			ParentEventIDs: heads,
 			ActorID:        proj.Config.ActorID,
 			Timestamp:      time.Now().UTC(),
 			Payload:        domain.MustMarshalPayload(domain.CommentPayload{Body: body}),
 		}
 
-		return appendAndMaterialize(ctx, proj, issue.ID, event)
+		return appendAndMaterialize(ctx, proj, wi.ID, event)
 	},
 }
 
@@ -331,37 +342,37 @@ var issueCloseCmd = &cobra.Command{
 		defer proj.DB.Close()
 
 		ctx := context.Background()
-		issue, err := resolveIssue(ctx, proj, args[0])
+		wi, err := resolveWorkItem(ctx, proj, args[0])
 		if err != nil {
 			return err
 		}
-		if issue.Status == "closed" {
+		if wi.Status == "closed" {
 			fmt.Println("Issue is already closed.")
 			return nil
 		}
 
-		heads, err := proj.DB.GetHeads(ctx, issue.ID)
+		heads, err := proj.DB.GetHeads(ctx, wi.ID)
 		if err != nil {
 			return err
 		}
 
 		event := domain.Event{
 			ID:             domain.NewEventID(),
-			IssueID:        issue.ID,
-			Type:           domain.EventIssueClosed,
+			WorkItemID:     wi.ID,
+			Type:           domain.EventWorkClosed,
 			ParentEventIDs: heads,
 			ActorID:        proj.Config.ActorID,
 			Timestamp:      time.Now().UTC(),
-			Payload:        domain.MustMarshalPayload(struct{}{}),
+			Payload:        domain.MustMarshalPayload(domain.ClosedPayload{}),
 		}
 
-		if err := appendAndMaterialize(ctx, proj, issue.ID, event); err != nil {
+		if err := appendAndMaterialize(ctx, proj, wi.ID, event); err != nil {
 			return err
 		}
 
-		id := string(issue.SharedID)
+		id := string(wi.SharedID)
 		if id == "" {
-			id = string(issue.ID)
+			id = string(wi.ID)
 		}
 		fmt.Printf("Closed %s\n", id)
 		return nil
@@ -380,37 +391,37 @@ var issueReopenCmd = &cobra.Command{
 		defer proj.DB.Close()
 
 		ctx := context.Background()
-		issue, err := resolveIssue(ctx, proj, args[0])
+		wi, err := resolveWorkItem(ctx, proj, args[0])
 		if err != nil {
 			return err
 		}
-		if issue.Status != "closed" {
+		if wi.Status != "closed" {
 			fmt.Println("Issue is not closed.")
 			return nil
 		}
 
-		heads, err := proj.DB.GetHeads(ctx, issue.ID)
+		heads, err := proj.DB.GetHeads(ctx, wi.ID)
 		if err != nil {
 			return err
 		}
 
 		event := domain.Event{
 			ID:             domain.NewEventID(),
-			IssueID:        issue.ID,
-			Type:           domain.EventIssueReopened,
+			WorkItemID:     wi.ID,
+			Type:           domain.EventWorkReopened,
 			ParentEventIDs: heads,
 			ActorID:        proj.Config.ActorID,
 			Timestamp:      time.Now().UTC(),
 			Payload:        domain.MustMarshalPayload(struct{}{}),
 		}
 
-		if err := appendAndMaterialize(ctx, proj, issue.ID, event); err != nil {
+		if err := appendAndMaterialize(ctx, proj, wi.ID, event); err != nil {
 			return err
 		}
 
-		id := string(issue.SharedID)
+		id := string(wi.SharedID)
 		if id == "" {
-			id = string(issue.ID)
+			id = string(wi.ID)
 		}
 		fmt.Printf("Reopened %s\n", id)
 		return nil
@@ -429,7 +440,7 @@ var issueAttachCmd = &cobra.Command{
 		defer proj.DB.Close()
 
 		ctx := context.Background()
-		issue, err := resolveIssue(ctx, proj, args[0])
+		wi, err := resolveWorkItem(ctx, proj, args[0])
 		if err != nil {
 			return err
 		}
@@ -443,13 +454,11 @@ var issueAttachCmd = &cobra.Command{
 			return fmt.Errorf("file too large: %d bytes (max %d)", info.Size(), blob.MaxBlobSize)
 		}
 
-		// Compute hash.
 		hash, size, err := blob.ComputeFileHash(filePath)
 		if err != nil {
 			return err
 		}
 
-		// Store blob locally.
 		f, err := os.Open(filePath)
 		if err != nil {
 			return err
@@ -460,53 +469,51 @@ var issueAttachCmd = &cobra.Command{
 			return fmt.Errorf("storing blob: %w", err)
 		}
 
-		// Determine mime type.
 		filename := filepath.Base(filePath)
 		mimeType := mime.TypeByExtension(filepath.Ext(filename))
 		if mimeType == "" {
 			mimeType = "application/octet-stream"
 		}
 
-		// Create event.
-		heads, err := proj.DB.GetHeads(ctx, issue.ID)
+		heads, err := proj.DB.GetHeads(ctx, wi.ID)
 		if err != nil {
 			return err
 		}
 
-		attID := domain.NewAttachmentID()
+		artID := domain.NewArtifactID()
 		event := domain.Event{
 			ID:             domain.NewEventID(),
-			IssueID:        issue.ID,
-			Type:           domain.EventAttachmentAdded,
+			WorkItemID:     wi.ID,
+			Type:           domain.EventWorkArtifactAdded,
 			ParentEventIDs: heads,
 			ActorID:        proj.Config.ActorID,
 			Timestamp:      time.Now().UTC(),
-			Payload: domain.MustMarshalPayload(domain.AttachmentAddedPayload{
-				AttachmentID: attID,
-				ContentHash:  hash,
-				Filename:     filename,
-				MimeType:     mimeType,
-				SizeBytes:    size,
+			Payload: domain.MustMarshalPayload(domain.ArtifactAddedPayload{
+				ArtifactID:  artID,
+				ContentHash: hash,
+				Filename:    filename,
+				MimeType:    mimeType,
+				SizeBytes:   size,
 			}),
 		}
 
-		if err := appendAndMaterialize(ctx, proj, issue.ID, event); err != nil {
+		if err := appendAndMaterialize(ctx, proj, wi.ID, event); err != nil {
 			return err
 		}
 
-		id := string(issue.SharedID)
+		id := string(wi.SharedID)
 		if id == "" {
-			id = string(issue.ID)
+			id = string(wi.ID)
 		}
-		fmt.Printf("Attached %s to %s (%s, %d bytes)\n", filename, id, attID, size)
+		fmt.Printf("Attached %s to %s (%s, %d bytes)\n", filename, id, artID, size)
 		return nil
 	},
 }
 
 var issueAttachmentsCmd = &cobra.Command{
-	Use:     "attachments <issue-id>",
-	Short:   "List attachments for an issue",
-	Args:    cobra.ExactArgs(1),
+	Use:   "attachments <issue-id>",
+	Short: "List attachments for an issue",
+	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		proj, err := loadProject()
 		if err != nil {
@@ -515,17 +522,17 @@ var issueAttachmentsCmd = &cobra.Command{
 		defer proj.DB.Close()
 
 		ctx := context.Background()
-		issue, err := resolveIssue(ctx, proj, args[0])
+		wi, err := resolveWorkItem(ctx, proj, args[0])
 		if err != nil {
 			return err
 		}
 
-		if len(issue.Attachments) == 0 {
+		if len(wi.Artifacts) == 0 {
 			fmt.Println("No attachments.")
 			return nil
 		}
 
-		for _, a := range issue.Attachments {
+		for _, a := range wi.Artifacts {
 			fmt.Printf("%-28s %-30s %8d  %s  %s\n", a.ID, a.Filename, a.SizeBytes, a.MimeType, a.ContentHash)
 		}
 		return nil
@@ -544,47 +551,47 @@ var issueDetachCmd = &cobra.Command{
 		defer proj.DB.Close()
 
 		ctx := context.Background()
-		issue, err := resolveIssue(ctx, proj, args[0])
+		wi, err := resolveWorkItem(ctx, proj, args[0])
 		if err != nil {
 			return err
 		}
 
-		attID := domain.AttachmentID(args[1])
+		artID := domain.ArtifactID(args[1])
 		found := false
-		for _, a := range issue.Attachments {
-			if a.ID == attID {
+		for _, a := range wi.Artifacts {
+			if a.ID == artID {
 				found = true
 				break
 			}
 		}
 		if !found {
-			return fmt.Errorf("attachment %s not found on this issue", attID)
+			return fmt.Errorf("artifact %s not found on this work item", artID)
 		}
 
-		heads, err := proj.DB.GetHeads(ctx, issue.ID)
+		heads, err := proj.DB.GetHeads(ctx, wi.ID)
 		if err != nil {
 			return err
 		}
 
 		event := domain.Event{
 			ID:             domain.NewEventID(),
-			IssueID:        issue.ID,
-			Type:           domain.EventAttachmentRemoved,
+			WorkItemID:     wi.ID,
+			Type:           domain.EventWorkArtifactRemoved,
 			ParentEventIDs: heads,
 			ActorID:        proj.Config.ActorID,
 			Timestamp:      time.Now().UTC(),
-			Payload:        domain.MustMarshalPayload(domain.AttachmentRemovedPayload{AttachmentID: attID}),
+			Payload:        domain.MustMarshalPayload(domain.ArtifactRemovedPayload{ArtifactID: artID}),
 		}
 
-		if err := appendAndMaterialize(ctx, proj, issue.ID, event); err != nil {
+		if err := appendAndMaterialize(ctx, proj, wi.ID, event); err != nil {
 			return err
 		}
 
-		id := string(issue.SharedID)
+		id := string(wi.SharedID)
 		if id == "" {
-			id = string(issue.ID)
+			id = string(wi.ID)
 		}
-		fmt.Printf("Detached %s from %s\n", attID, id)
+		fmt.Printf("Detached %s from %s\n", artID, id)
 		return nil
 	},
 }
@@ -603,7 +610,7 @@ func init() {
 	issueCreateCmd.Flags().StringP("title", "t", "", "Issue title")
 	issueCreateCmd.Flags().StringP("body", "b", "", "Issue body")
 	issueCreateCmd.Flags().StringSliceP("label", "l", nil, "Labels to add (comma-separated or repeated)")
-	issueCreateCmd.Flags().String("type", "task", "Issue type slug")
+	issueCreateCmd.Flags().String("type", "task", "Work kind slug")
 	issueCreateCmd.MarkFlagRequired("title")
 
 	issueListCmd.Flags().StringP("status", "s", "", "Filter by status")
@@ -651,26 +658,24 @@ func loadProject() (*project.Project, error) {
 	return project.Load(root)
 }
 
-func resolveIssue(ctx context.Context, proj *project.Project, ref string) (*domain.Issue, error) {
-	// Try as shared ID first.
-	issue, err := proj.DB.GetIssueBySharedID(ctx, domain.SharedID(ref))
+func resolveWorkItem(ctx context.Context, proj *project.Project, ref string) (*domain.WorkItem, error) {
+	wi, err := proj.DB.GetWorkItemBySharedID(ctx, domain.SharedID(ref))
 	if err != nil {
 		return nil, err
 	}
-	if issue != nil {
-		return issue, nil
+	if wi != nil {
+		return wi, nil
 	}
 
-	// Try as canonical ID.
-	issue, err = proj.DB.GetIssue(ctx, domain.CanonicalID(ref))
+	wi, err = proj.DB.GetWorkItem(ctx, domain.WorkItemID(ref))
 	if err != nil {
 		return nil, err
 	}
-	if issue != nil {
-		return issue, nil
+	if wi != nil {
+		return wi, nil
 	}
 
-	return nil, fmt.Errorf("issue not found: %s", ref)
+	return nil, fmt.Errorf("work item not found: %s", ref)
 }
 
 func signEvent(proj *project.Project, e *domain.Event) error {
@@ -680,7 +685,7 @@ func signEvent(proj *project.Project, e *domain.Event) error {
 	return nil
 }
 
-func appendAndMaterialize(ctx context.Context, proj *project.Project, issueID domain.CanonicalID, event domain.Event) error {
+func appendAndMaterialize(ctx context.Context, proj *project.Project, workItemID domain.WorkItemID, event domain.Event) error {
 	if err := signEvent(proj, &event); err != nil {
 		return fmt.Errorf("signing event: %w", err)
 	}
@@ -689,21 +694,20 @@ func appendAndMaterialize(ctx context.Context, proj *project.Project, issueID do
 		return fmt.Errorf("appending event: %w", err)
 	}
 
-	events, err := proj.DB.GetEventsForIssue(ctx, issueID)
+	events, err := proj.DB.GetEventsForWorkItem(ctx, workItemID)
 	if err != nil {
 		return err
 	}
 	ordered := domain.CausalOrder(events)
-	issue, err := domain.Reduce(ordered)
+	wi, err := domain.Reduce(ordered)
 	if err != nil {
 		return err
 	}
 
-	// Preserve shared ID from existing issue.
-	existing, _ := proj.DB.GetIssue(ctx, issueID)
+	existing, _ := proj.DB.GetWorkItem(ctx, workItemID)
 	if existing != nil && existing.SharedID != "" {
-		issue.SharedID = existing.SharedID
+		wi.SharedID = existing.SharedID
 	}
 
-	return proj.DB.UpsertIssue(ctx, issue)
+	return proj.DB.UpsertWorkItem(ctx, wi)
 }

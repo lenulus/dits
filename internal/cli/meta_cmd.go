@@ -56,9 +56,9 @@ var metaShowCmd = &cobra.Command{
 			}
 		}
 
-		fmt.Printf("\nIssue Types (%d):\n", len(meta.IssueTypes))
-		for _, t := range meta.IssueTypes {
-			fmt.Printf("  %-20s workflow: %s\n", t.Slug, t.WorkflowSlug)
+		fmt.Printf("\nWork Kinds (%d):\n", len(meta.WorkKinds))
+		for _, k := range meta.WorkKinds {
+			fmt.Printf("  %-20s workflow: %s\n", k.Slug, k.WorkflowSlug)
 		}
 
 		fmt.Printf("\nPriorities: %v\n", meta.Priorities)
@@ -191,12 +191,12 @@ var metaLabelListCmd = &cobra.Command{
 
 var metaTypeCmd = &cobra.Command{
 	Use:   "type",
-	Short: "Manage issue types",
+	Short: "Manage work kinds",
 }
 
 var metaTypeAddCmd = &cobra.Command{
 	Use:   "add",
-	Short: "Add an issue type",
+	Short: "Add a work kind",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		slug, _ := cmd.Flags().GetString("slug")
 		name, _ := cmd.Flags().GetString("name")
@@ -228,7 +228,7 @@ var metaTypeAddCmd = &cobra.Command{
 		}
 
 		prevVersion := meta.Version
-		if err := meta.AddIssueType(domain.IssueType{Slug: slug, Name: name, WorkflowSlug: workflow}); err != nil {
+		if err := meta.AddWorkKind(domain.WorkKind{Slug: slug, Name: name, WorkflowSlug: workflow}); err != nil {
 			return err
 		}
 
@@ -239,14 +239,14 @@ var metaTypeAddCmd = &cobra.Command{
 			return err
 		}
 
-		fmt.Printf("Added issue type %q (version %d)\n", slug, meta.Version)
+		fmt.Printf("Added work kind %q (version %d)\n", slug, meta.Version)
 		return nil
 	},
 }
 
 var metaTypeListCmd = &cobra.Command{
-	Use:   "list",
-	Short: "List all issue types",
+	Use:     "list",
+	Short:   "List all work kinds",
 	Aliases: []string{"ls"},
 	RunE: func(cmd *cobra.Command, args []string) error {
 		proj, err := loadProject()
@@ -259,12 +259,12 @@ var metaTypeListCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		if meta == nil || len(meta.IssueTypes) == 0 {
-			fmt.Println("No issue types defined.")
+		if meta == nil || len(meta.WorkKinds) == 0 {
+			fmt.Println("No work kinds defined.")
 			return nil
 		}
-		for _, t := range meta.IssueTypes {
-			fmt.Printf("%-20s %-20s workflow: %s\n", t.Slug, t.Name, t.WorkflowSlug)
+		for _, k := range meta.WorkKinds {
+			fmt.Printf("%-20s %-20s workflow: %s\n", k.Slug, k.Name, k.WorkflowSlug)
 		}
 		return nil
 	},
