@@ -2,7 +2,7 @@
 
 **Status:** Draft
 **Author:** Anthony Laforge
-**Version:** 0.1
+**Version:** 0.2
 **Branch:** v2
 
 ---
@@ -18,6 +18,8 @@ Agents do not think in tickets. They work on investigations, plans, execution ru
 The engine is already the hard part. The limitation is the semantic layer.
 
 v2 keeps the engine. Changes the center of gravity.
+
+v2 is a **new versioned system**, not an in-place migration of v1 repositories. New domain model, new event vocabulary, new tables. The engine (DAG, sync, blob store, signatures) carries forward. v1 data does not convert automatically — this is a clean break at the semantic layer.
 
 ---
 
@@ -46,9 +48,11 @@ v2 keeps the engine. Changes the center of gravity.
 
 ## 4. Key Design Principle
 
-> **The primitive is not a ticket. The primitive is a durable coordination object with causal history, materialized views, and optional human-friendly projection.**
+> **The primitive is a durable coordination object with causal history and materialized operational views. Ticketing is one human-facing projection of that substrate.**
 
 A work item is the unit of coordination. It has a kind. An "issue" is a work item with `kind=issue`. The event vocabulary is the API. HTTP endpoints are query surfaces, not the coordination mechanism. Two agents coordinate by appending events to the same work item's DAG.
+
+> **Operational coordination state (lease ownership, active attempts, blocked flags) is first-class and not reducible to workflow status.** Status remains a human- and policy-facing abstraction over work progression. A work item can be `status=in_progress` while also being blocked, leased, and on its third attempt — those are independent dimensions, not redundant encodings of the same thing.
 
 ---
 
@@ -64,12 +68,14 @@ A work item is the unit of coordination. It has a kind. An "issue" is a work ite
 | `ActorID` | `actor_<pubkey_prefix>` | Derived from Ed25519 public key |
 | `NodeID` | `node_<ULID>` | DITS instance identifier |
 | `ArtifactID` | `art_<ULID>` | Content reference |
-| `LeaseID` | `lea_<ULID>` | Claim/lease identifier |
+| `LeaseID` | `lea_<ULID>` | Lease identifier |
 | `AttemptID` | `atp_<ULID>` | Execution attempt identifier |
+| `ReviewID` | `rev_<ULID>` | Review instance identifier |
+| `HandoffID` | `hof_<ULID>` | Handoff instance identifier |
 
 ### 5.2 Work Item (Primary Object)
 
-Supersedes `Issue`. Materialized from events.
+Generalizes `Issue`. Materialized from events. Issue becomes a specialization (`kind=issue`).
 
 ```go
 type WorkItem struct {
@@ -102,7 +108,7 @@ type WorkItem struct {
     Relations       []Relation
     Checkpoints     []Checkpoint
     Observations    []Observation
-    Claims          []Claim
+    Findings        []Finding
     Attempts        []ExecutionAttempt
 
     EventCount      int
@@ -127,7 +133,13 @@ Default kinds, extensible via meta:
 
 ### 5.4 Artifact
 
-Supersedes `Attachment`. Content-addressed, with type and provenance.
+Generalizes `Attachment`. Content-addressed, with type and provenance.
+
+An artifact has two identities:
+- **`ArtifactID`** (`art_<ULID>`) — identifies the reference record (per-work-item, carries role/type/provenance)
+- **`ContentHash`** (`sha256:<hex>`) — identifies the underlying bytes (global, content-addressed)
+
+The same content hash can appear in multiple artifacts with different roles, types, and provenance. Removing an artifact removes the reference from the work item; the blob remains in the content-addressed store (garbage collection is a separate concern).
 
 ```go
 type Artifact struct {
@@ -146,14 +158,29 @@ type Artifact struct {
 
 ### 5.5 Provenance
 
+Provenance exists at two distinct layers:
+
+- **Event provenance** (`EmittedBy` on Event struct): who/what created and emitted the event itself. This is the orchestration layer — the agent or human that decided to record this event.
+- **Content provenance** (`ProducedBy` in payloads): who/what produced the content being referenced. This is the subject layer — the model that generated a response, the tool that observed a log, the agent that wrote a patch.
+
+These are often the same actor, but not always. An orchestration agent may emit an `evidence_attached` event for an artifact that was produced by a different tool or model.
+
 ```go
+// EmittedBy identifies who/what created the event.
+type EmittedBy struct {
+    ActorID  ActorID `json:"actor_id"`
+    AgentID  string  `json:"agent_id,omitempty"`
+    Version  string  `json:"version,omitempty"`
+}
+
+// ProducedBy identifies who/what produced the referenced content.
 type ProducedBy struct {
-    ActorID           ActorID  `json:"actor_id"`
-    AgentID           string   `json:"agent_id,omitempty"`
-    Model             string   `json:"model,omitempty"`             // e.g. "claude-3.5-sonnet"
-    Tool              string   `json:"tool,omitempty"`              // e.g. "code-search", "grep"
-    Version           string   `json:"version,omitempty"`
-    PromptRef         string   `json:"prompt_ref,omitempty"`        // content hash of prompt
+    ActorID            ActorID  `json:"actor_id"`
+    AgentID            string   `json:"agent_id,omitempty"`
+    Model              string   `json:"model,omitempty"`             // e.g. "claude-3.5-sonnet"
+    Tool               string   `json:"tool,omitempty"`              // e.g. "code-search", "grep"
+    Version            string   `json:"version,omitempty"`
+    PromptRef          string   `json:"prompt_ref,omitempty"`        // content hash of prompt
     SourceArtifactRefs []string `json:"source_artifact_refs,omitempty"` // input artifact hashes
 }
 ```
@@ -198,10 +225,12 @@ type Observation struct {
 }
 ```
 
-### 5.9 Claim (Assertion)
+### 5.9 Finding (Epistemic Assertion)
+
+A finding is a structured claim about reality — what was observed, concluded, or hypothesized. Distinct from lease claims (which are about ownership).
 
 ```go
-type Claim struct {
+type Finding struct {
     EventID       EventID
     Statement     string
     Confidence    float64     // 0.0 - 1.0
@@ -228,7 +257,7 @@ Formalized core set, extensible via meta:
 | `duplicates` | Duplicates | `duplicated_by` |
 | `derived_from` | Derived from | `derived_into` |
 | `produced_artifact` | Produced artifact | — |
-| `supports_claim` | Supports claim | — |
+| `supports_finding` | Supports finding | — |
 | `supersedes` | Supersedes | `superseded_by` |
 
 ---
@@ -237,7 +266,7 @@ Formalized core set, extensible via meta:
 
 Event naming convention: `work.<verb_past_tense>`.
 
-The `Event` struct adds an optional `ProducedBy` field:
+The `Event` struct carries `EmittedBy` for event-level provenance. Payload-level `produced_by` fields capture content provenance where applicable.
 
 ```go
 type Event struct {
@@ -249,7 +278,7 @@ type Event struct {
     ActorID        ActorID         `json:"actor_id"`
     Timestamp      time.Time       `json:"timestamp"`
     Payload        json.RawMessage `json:"payload"`
-    ProducedBy     *ProducedBy     `json:"produced_by,omitempty"`
+    EmittedBy      *EmittedBy      `json:"emitted_by,omitempty"`
     Signature      []byte          `json:"signature,omitempty"`
 }
 ```
@@ -276,8 +305,8 @@ type Event struct {
 
 | Event | Payload |
 |-------|---------|
-| `work.claimed` | `{lease_id, lease_duration_secs, lease_expires_at, generation}` |
-| `work.claim_released` | `{lease_id, reason}` |
+| `work.leased` | `{lease_id, lease_duration_secs, lease_expires_at, generation}` |
+| `work.lease_released` | `{lease_id, reason}` |
 | `work.lease_renewed` | `{lease_id, lease_expires_at, generation}` |
 | `work.execution_started` | `{attempt_id, attempt_number, plan_ref?}` |
 | `work.execution_completed` | `{attempt_id, summary, output_artifact_refs?}` |
@@ -299,8 +328,8 @@ type Event struct {
 |-------|---------|
 | `work.observation_recorded` | `{summary, data?, produced_by?}` |
 | `work.evidence_attached` | `{artifact_id, content_hash, filename, mime_type, size_bytes, artifact_type, semantic_role, produced_by?}` |
-| `work.claim_made` | `{statement, confidence, source?, evidence_refs?, produced_by?}` |
-| `work.claim_retracted` | `{original_event_id, reason}` |
+| `work.finding_recorded` | `{statement, confidence, source?, evidence_refs?, produced_by?}` |
+| `work.finding_retracted` | `{original_event_id, reason}` |
 
 ### 6.5 Planning / Decision Events
 
@@ -316,11 +345,11 @@ type Event struct {
 
 | Event | Payload |
 |-------|---------|
-| `work.review_requested` | `{reviewer?, scope, artifact_refs?}` |
-| `work.review_completed` | `{review_event_id, verdict, comment?, produced_by?}` |
-| `work.handed_off` | `{from, to, context, artifact_refs?}` |
-| `work.accepted` | `{handoff_event_id, comment?}` |
-| `work.rejected` | `{handoff_event_id, reason}` |
+| `work.review_requested` | `{review_id, reviewer?, scope, artifact_refs?}` |
+| `work.review_completed` | `{review_id, verdict, comment?, produced_by?}` |
+| `work.handed_off` | `{handoff_id, from, to, context, artifact_refs?}` |
+| `work.handoff_accepted` | `{handoff_id, comment?}` |
+| `work.handoff_rejected` | `{handoff_id, reason}` |
 
 ### 6.7 Relation / Artifact Events
 
@@ -341,13 +370,13 @@ A claim creates a lease with an expiration time. Leases are materialized into a 
 
 **Rules:**
 - Only one active lease per work item at a time
-- Claiming a work item with an active non-expired lease fails
+- Leasing a work item with an active non-expired lease fails
 - A lease can be renewed (extends expiration) or released (explicit relinquish)
 - If a lease expires without renewal, any actor may claim
 - The `generation` counter is monotonically increasing per work item — prevents stale renewals
 
 **Materialization:**
-Leases are a hybrid of events + wall-clock time. The `coordination_leases` table is an operational cache. Rebuild logic: replay all claim/release/renew events in causal order, then expire leases where `expires_at < now()`.
+Leases are a hybrid of events + wall-clock time. The `coordination_leases` table is an operational cache. Rebuild logic: replay all lease/release/renew events in causal order, then expire leases where `expires_at < now()`.
 
 ```go
 type Lease struct {
@@ -383,14 +412,15 @@ Failed attempts with `retryable=true` signal that a new attempt is appropriate.
 Actor A                          Actor B
   |                                |
   |--- work.handed_off ----------->|
-  |    (context, artifact_refs)    |
+  |    (handoff_id, context,       |
+  |     artifact_refs)             |
   |                                |
-  |<-- work.accepted -------------|
+  |<-- work.handoff_accepted ------|
   |    or                          |
-  |<-- work.rejected -------------|
+  |<-- work.handoff_rejected ------|
 ```
 
-Rejection returns effective ownership to the handing-off actor.
+Each handoff has a `HandoffID` for durable sub-entity identity. Rejection returns effective ownership to the handing-off actor. Multiple concurrent handoffs to different actors are possible (each with a distinct `handoff_id`).
 
 ### 7.5 Review Protocol
 
@@ -398,12 +428,16 @@ Rejection returns effective ownership to the handing-off actor.
 Actor A                          Reviewer
   |                                |
   |--- work.review_requested ----->|
-  |    (scope, artifact_refs)      |
+  |    (review_id, scope,          |
+  |     artifact_refs)             |
   |                                |
   |<-- work.review_completed ------|
-  |    (verdict: approve |         |
-  |     request_changes | reject)  |
+  |    (review_id, verdict:        |
+  |     approve | request_changes  |
+  |     | reject)                  |
 ```
+
+Each review has a `ReviewID` for durable sub-entity identity. Multiple concurrent reviews are supported (each with a distinct `review_id`).
 
 ---
 
@@ -616,7 +650,7 @@ All v2 endpoints under `/api/v2/`.
 | GET | `/api/v2/events` | `since`, `type`, `actor_id`, `limit` | Cross-item event query |
 | GET | `/api/v2/artifacts/{hash}/metadata` | — | Artifact metadata by content hash |
 
-### `ready=true` semantics
+### `ready=true` semantics (v2 baseline readiness)
 
 Returns work items where:
 - Status is in an `open` category
@@ -624,6 +658,8 @@ Returns work items where:
 - Not blocked (no unresolved `work.blocked` event)
 
 This is the "what should I do next?" query for agents.
+
+**Note:** This is v2 baseline readiness. Future versions may evolve this into policy-driven readiness that also considers dependency satisfaction, required review completion, missing artifacts, and lease policy constraints. The current definition is intentionally simple and should not be over-relied upon for complex workflow orchestration.
 
 ---
 
@@ -685,15 +721,30 @@ CLI commands for the new domain, plus full integration testing.
 
 ---
 
-## 11. Success Criteria
+## 11. Invariants
 
-1. An agent can claim a work item, checkpoint progress 3 times, and complete execution — all recorded as events in the DAG and visible via `dits work show`
-2. Two agents attempting to claim the same work item: one succeeds, the other gets a conflict (lease already held)
-3. A lease expires after its duration, and a different agent can then claim the work item
+These hold at all times, regardless of event ordering or node topology:
+
+1. **Deterministic materialization** — the same event set must yield the same materialized WorkItem, regardless of which node reduces it
+2. **At most one active lease** — a work item has at most one non-expired lease at any time
+3. **Lease generation monotonicity** — expired leases are not renewable without a matching generation; stale renewals are rejected
+4. **Artifacts are content-addressed and immutable by hash** — the same hash always references the same bytes
+5. **SharedIDs are presentation, never canonical identity** — SharedID is a human convenience; WorkItemID is the durable key
+6. **Operational state is independent of status** — lease, attempt, and blocked state do not imply or require a particular workflow status
+7. **Events are immutable** — no event is ever modified or deleted after creation
+8. **The coordination table is a rebuildable cache** — it can be dropped and reconstructed from events + wall-clock time
+
+---
+
+## 12. Success Criteria
+
+1. An agent can lease a work item, checkpoint progress 3 times, and complete execution — all recorded as events in the DAG and visible via `dits work show`
+2. Two agents attempting to lease the same work item: one succeeds, the other gets a conflict (lease already held)
+3. A lease expires after its duration, and a different agent can then lease the work item
 4. The coordination table can be rebuilt from events + wall-clock time (drop and recreate test)
 5. Artifacts with provenance metadata are queryable by type, role, and producer
 6. `GET /api/v2/work?ready=true` correctly returns only unclaimed, unblocked, open work items
-7. Evidence and observations are preserved with confidence scores and source references
+7. Findings and observations are preserved with confidence scores and source references
 8. Handoff between two actors completes with accept/reject semantics
 9. All materialized state is deterministic: same events produce same WorkItem regardless of which node reduces them
 10. `dits issue create` works as a convenience that creates a `work.created` event with `kind=issue`
