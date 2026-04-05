@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -337,4 +338,108 @@ func TestV2_Health(t *testing.T) {
 	srv, _ := setupServer(t)
 	result := getJSON(t, srv, "/api/v1/health")
 	assert.Equal(t, "ok", result["status"])
+}
+
+func TestV1_BlobCheckUploadDownload(t *testing.T) {
+	srv, _ := setupServer(t)
+
+	// Check — nothing exists yet.
+	checkBody := `{"hashes":["sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"]}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/blobs/check", strings.NewReader(checkBody))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var checkResp map[string]any
+	json.Unmarshal(w.Body.Bytes(), &checkResp)
+	missing := checkResp["missing"].([]any)
+	assert.Len(t, missing, 1)
+
+	// Upload — empty file hash.
+	hash := "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+	req = httptest.NewRequest(http.MethodPut, "/api/v1/blobs/"+hash, strings.NewReader(""))
+	req.Header.Set("Content-Type", "application/octet-stream")
+	w = httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	// Download.
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/blobs/"+hash, nil)
+	w = httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	// Download non-existent.
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/blobs/sha256:nonexistent", nil)
+	w = httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusNotFound, w.Code)
+}
+
+func TestV1_SyncHandler(t *testing.T) {
+	srv, _ := setupServer(t)
+
+	syncBody := `{"node_id":"node_test","project_key":"TEST","heads":[],"events":[],"meta_version":1}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/sync", strings.NewReader(syncBody))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var resp map[string]any
+	json.Unmarshal(w.Body.Bytes(), &resp)
+	// Response should contain events key (may be null/empty).
+	_, hasEvents := resp["events"]
+	assert.True(t, hasEvents, "sync response should contain events field")
+}
+
+func TestV1_SyncHandler_InvalidJSON(t *testing.T) {
+	srv, _ := setupServer(t)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/sync", strings.NewReader("not json"))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestV2_ArtifactRoleFilter(t *testing.T) {
+	srv, db := setupServer(t)
+	ctx := context.Background()
+	t0 := time.Date(2026, 4, 1, 10, 0, 0, 0, time.UTC)
+
+	seedWorkItem(t, db, "wrk_001", "Investigation", "investigation", "actor_a", t0)
+
+	// Add two artifacts with different roles.
+	heads, _ := db.GetHeads(ctx, "wrk_001")
+	appendEvent(t, db, "wrk_001", domain.Event{
+		ID: domain.NewEventID(), WorkItemID: "wrk_001", Type: domain.EventWorkArtifactAdded,
+		ParentEventIDs: heads, ActorID: "actor_a", Timestamp: t0.Add(time.Minute),
+		Payload: domain.MustMarshalPayload(domain.ArtifactAddedPayload{
+			ArtifactID: "art_001", ContentHash: "sha256:aaa", Filename: "trace.json",
+			MimeType: "application/json", SizeBytes: 100, ArtifactType: "trace", SemanticRole: "evidence",
+		}),
+	})
+
+	heads, _ = db.GetHeads(ctx, "wrk_001")
+	appendEvent(t, db, "wrk_001", domain.Event{
+		ID: domain.NewEventID(), WorkItemID: "wrk_001", Type: domain.EventWorkArtifactAdded,
+		ParentEventIDs: heads, ActorID: "actor_a", Timestamp: t0.Add(2 * time.Minute),
+		Payload: domain.MustMarshalPayload(domain.ArtifactAddedPayload{
+			ArtifactID: "art_002", ContentHash: "sha256:bbb", Filename: "plan.md",
+			MimeType: "text/markdown", SizeBytes: 200, ArtifactType: "plan", SemanticRole: "proposal",
+		}),
+	})
+
+	// All artifacts.
+	result := getJSON(t, srv, "/api/v2/work/wrk_001/artifacts")
+	assert.Equal(t, float64(2), result["count"])
+
+	// Filter by role.
+	result = getJSON(t, srv, "/api/v2/work/wrk_001/artifacts?role=evidence")
+	assert.Equal(t, float64(1), result["count"])
+
+	result = getJSON(t, srv, "/api/v2/work/wrk_001/artifacts?role=proposal")
+	assert.Equal(t, float64(1), result["count"])
 }

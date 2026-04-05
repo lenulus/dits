@@ -272,6 +272,164 @@ func TestSync_ConcurrentEditsConverge(t *testing.T) {
 	assert.Equal(t, "Title from B", wiServer.Title, "later timestamp wins in causal order")
 }
 
+func TestSync_MetaPropagation(t *testing.T) {
+	ctx := context.Background()
+	serverDB := setupDB(t, "server")
+	clientDB := setupDB(t, "client")
+
+	serverEngine := dsync.NewEngine(serverDB)
+	clientEngine := dsync.NewEngine(clientDB)
+
+	clientNode := domain.NodeID("client-1")
+	serverNode := domain.NodeID("server")
+
+	// Client adds a label (bumps meta version).
+	meta, _ := clientDB.GetCurrentMeta(ctx)
+	meta.Labels = append(meta.Labels, domain.Label{Slug: "urgent", Name: "Urgent"})
+	meta.Version = 2
+	require.NoError(t, clientDB.SaveMeta(ctx, meta))
+
+	// Sync: client pushes newer meta.
+	req, err := clientEngine.BuildSyncRequest(ctx, clientNode, "TEST", serverNode)
+	require.NoError(t, err)
+	require.NotNil(t, req.Meta)
+	assert.Equal(t, domain.MetaVersion(2), req.Meta.Version)
+
+	resp, err := serverEngine.HandleSync(ctx, *req)
+	require.NoError(t, err)
+	require.NoError(t, clientEngine.ApplySync(ctx, resp, serverNode))
+
+	// Server should now have the label.
+	serverMeta, _ := serverDB.GetCurrentMeta(ctx)
+	require.NotNil(t, serverMeta)
+	assert.Equal(t, domain.MetaVersion(2), serverMeta.Version)
+	assert.True(t, serverMeta.HasLabel("urgent"))
+}
+
+func TestSync_SharedIDPropagation(t *testing.T) {
+	ctx := context.Background()
+	serverDB := setupDB(t, "server")
+	clientADB := setupDB(t, "clientA")
+	clientBDB := setupDB(t, "clientB")
+
+	serverEngine := dsync.NewEngine(serverDB)
+	clientAEngine := dsync.NewEngine(clientADB)
+	clientBEngine := dsync.NewEngine(clientBDB)
+
+	nodeA := domain.NodeID("client-A")
+	nodeB := domain.NodeID("client-B")
+	serverNode := domain.NodeID("server")
+	t0 := time.Date(2026, 4, 1, 10, 0, 0, 0, time.UTC)
+
+	// A creates and syncs (server assigns shared ID).
+	wiID := domain.WorkItemID("wrk_test_shared")
+	evt := createWorkItemEvent(wiID, "Test shared", "actor_alice", t0)
+	require.NoError(t, clientADB.AppendEvents(ctx, []domain.Event{evt}))
+	materialize(t, clientADB, wiID)
+
+	reqA, _ := clientAEngine.BuildSyncRequest(ctx, nodeA, "TEST", serverNode)
+	respA, _ := serverEngine.HandleSync(ctx, *reqA)
+	require.NoError(t, clientAEngine.ApplySync(ctx, respA, serverNode))
+
+	// Server should have assigned a shared ID.
+	assert.NotEmpty(t, respA.SharedIDs)
+
+	// B syncs and should receive the shared ID for the pulled work item.
+	reqB, _ := clientBEngine.BuildSyncRequest(ctx, nodeB, "TEST", serverNode)
+	respB, err := serverEngine.HandleSync(ctx, *reqB)
+	require.NoError(t, err)
+	require.NoError(t, clientBEngine.ApplySync(ctx, respB, serverNode))
+
+	// B should have the shared ID.
+	wiB, _ := clientBDB.GetWorkItem(ctx, wiID)
+	require.NotNil(t, wiB)
+	assert.NotEmpty(t, wiB.SharedID)
+}
+
+func TestSync_EmptySync(t *testing.T) {
+	ctx := context.Background()
+	serverDB := setupDB(t, "server")
+	clientDB := setupDB(t, "client")
+
+	serverEngine := dsync.NewEngine(serverDB)
+	clientEngine := dsync.NewEngine(clientDB)
+
+	clientNode := domain.NodeID("client-1")
+	serverNode := domain.NodeID("server")
+
+	// Empty sync — no events on either side.
+	req, err := clientEngine.BuildSyncRequest(ctx, clientNode, "TEST", serverNode)
+	require.NoError(t, err)
+	assert.Len(t, req.Events, 0)
+
+	resp, err := serverEngine.HandleSync(ctx, *req)
+	require.NoError(t, err)
+	assert.Len(t, resp.Events, 0)
+
+	require.NoError(t, clientEngine.ApplySync(ctx, resp, serverNode))
+}
+
+func TestSync_IdempotentRequest(t *testing.T) {
+	ctx := context.Background()
+	serverDB := setupDB(t, "server")
+	clientDB := setupDB(t, "client")
+
+	serverEngine := dsync.NewEngine(serverDB)
+	clientEngine := dsync.NewEngine(clientDB)
+
+	clientNode := domain.NodeID("client-1")
+	serverNode := domain.NodeID("server")
+	t0 := time.Date(2026, 4, 1, 10, 0, 0, 0, time.UTC)
+
+	wiID := domain.WorkItemID("wrk_idem")
+	evt := createWorkItemEvent(wiID, "Idempotent", "actor_alice", t0)
+	require.NoError(t, clientDB.AppendEvents(ctx, []domain.Event{evt}))
+	materialize(t, clientDB, wiID)
+
+	req, _ := clientEngine.BuildSyncRequest(ctx, clientNode, "TEST", serverNode)
+
+	// Send same request twice.
+	resp1, err := serverEngine.HandleSync(ctx, *req)
+	require.NoError(t, err)
+
+	resp2, err := serverEngine.HandleSync(ctx, *req)
+	require.NoError(t, err)
+
+	// Both should succeed. Second should return no new events.
+	assert.Len(t, resp1.Events, 0)
+	assert.Len(t, resp2.Events, 0)
+
+	// Server should have exactly one work item.
+	wi, _ := serverDB.GetWorkItem(ctx, wiID)
+	require.NotNil(t, wi)
+	assert.Equal(t, "Idempotent", wi.Title)
+}
+
+func TestSync_ActorRegistration(t *testing.T) {
+	ctx := context.Background()
+	serverDB := setupDB(t, "server")
+
+	serverEngine := dsync.NewEngine(serverDB)
+
+	req := dsync.SyncRequest{
+		NodeID:      "node_test",
+		ProjectKey:  "TEST",
+		Heads:       nil,
+		Events:      nil,
+		MetaVersion: 1,
+		ActorID:     "actor_test",
+		PublicKey:    "deadbeef1234",
+	}
+
+	_, err := serverEngine.HandleSync(ctx, req)
+	require.NoError(t, err)
+
+	// Actor should be registered.
+	key, err := serverDB.GetActorPublicKey(ctx, "actor_test")
+	require.NoError(t, err)
+	assert.Equal(t, "deadbeef1234", key)
+}
+
 func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
