@@ -753,6 +753,8 @@ Implementation decisions to resolve during build-out, not design blockers:
 
 4. **Blob garbage collection.** When an artifact is removed from a work item, the blob remains in the content-addressed store. When (if ever) are unreferenced blobs cleaned up? Options: never (storage is cheap), manual GC command, reference-counted with periodic sweep. This is a deployment concern, not a protocol concern, but should be documented.
 
+5. **Eval as a first-class concept.** Future versions may introduce evals as either a work kind or structured sub-entity for rubric-based assessment of artifacts, attempts, findings, or plans. Evals differ from reviews in that they are metric/rubric-driven, often repeatable, and intended for comparison over time. Likely more fundamental than `artifact_review` as a long-term primitive — if those two concepts compete, eval probably has deeper legs. Not in scope for initial implementation, but the artifact/provenance/finding infrastructure is designed to support it.
+
 ---
 
 ## 13. Success Criteria
