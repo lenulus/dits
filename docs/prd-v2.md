@@ -26,7 +26,7 @@ v2 is a **new versioned system**, not an in-place migration of v1 repositories. 
 ## 2. Design Goals
 
 1. **Work items, not issues** — the primary object is a durable coordination object with a `kind`, not a ticket with a `type_slug`
-2. **Agent-native coordination** — first-class events for claiming work, checkpointing progress, recording evidence, proposing plans, and handing off between actors
+2. **Agent-native coordination** — first-class events for leasing work, checkpointing progress, recording evidence, proposing plans, and handing off between actors
 3. **Structured provenance** — every meaningful event carries optional metadata about what produced it (model, tool, version, source artifacts)
 4. **Artifacts over attachments** — files have types, semantic roles, and producer metadata — they are outputs, not footnotes
 5. **Machine query surfaces** — endpoints that answer "what should I do next?" not just "list all tickets"
