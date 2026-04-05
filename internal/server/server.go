@@ -6,6 +6,8 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strconv"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -35,18 +37,24 @@ func New(db store.DB, blobs blob.Store, logger *slog.Logger) *Server {
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.RequestID)
 
+	// v1 protocol endpoints (sync, blobs)
 	r.Post("/api/v1/sync", s.handleSync)
 	r.Get("/api/v1/health", s.handleHealth)
-
-	// Blob API
 	r.Post("/api/v1/blobs/check", s.handleBlobCheck)
 	r.Put("/api/v1/blobs/{hash}", s.handleBlobUpload)
 	r.Get("/api/v1/blobs/{hash}", s.handleBlobDownload)
 
-	// Query API
-	r.Get("/api/v1/work", s.handleListWorkItems)
-	r.Get("/api/v1/work/{id}", s.handleGetWorkItem)
-	r.Get("/api/v1/meta", s.handleGetMeta)
+	// v2 query API
+	r.Route("/api/v2", func(r chi.Router) {
+		r.Get("/work", s.handleListWorkItemsV2)
+		r.Get("/work/{id}", s.handleGetWorkItemV2)
+		r.Get("/work/{id}/events", s.handleWorkItemEvents)
+		r.Get("/work/{id}/artifacts", s.handleWorkItemArtifacts)
+		r.Get("/work/{id}/attempts", s.handleWorkItemAttempts)
+		r.Get("/work/{id}/checkpoints", s.handleWorkItemCheckpoints)
+		r.Get("/events", s.handleListEvents)
+		r.Get("/meta", s.handleGetMeta)
+	})
 
 	s.router = r
 	return s
@@ -60,6 +68,8 @@ func (s *Server) ListenAndServe(addr string) error {
 	s.logger.Info("server starting", "addr", addr)
 	return http.ListenAndServe(addr, s)
 }
+
+// --- Sync ---
 
 func (s *Server) handleSync(w http.ResponseWriter, r *http.Request) {
 	var req dsync.SyncRequest
@@ -114,15 +124,10 @@ func (s *Server) handleBlobCheck(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp := blobCheckResponse{
-		Present: []string{},
-		Missing: []string{},
-	}
-
+	resp := blobCheckResponse{Present: []string{}, Missing: []string{}}
 	for _, h := range req.Hashes {
 		exists, err := s.blobs.Has(r.Context(), h)
 		if err != nil {
-			s.logger.Error("blob check failed", "hash", h, "error", err)
 			s.jsonError(w, "internal error", http.StatusInternalServerError)
 			return
 		}
@@ -145,14 +150,11 @@ func (s *Server) handleBlobUpload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	r.Body = http.MaxBytesReader(w, r.Body, blob.MaxBlobSize+1)
-
 	if err := s.blobs.Put(r.Context(), hash, r.Body); err != nil {
-		s.logger.Error("blob upload failed", "hash", hash, "error", err)
 		s.jsonError(w, fmt.Sprintf("upload failed: %v", err), http.StatusBadRequest)
 		return
 	}
 
-	s.logger.Info("blob uploaded", "hash", hash)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok", "hash": hash})
 }
@@ -175,22 +177,67 @@ func (s *Server) handleBlobDownload(w http.ResponseWriter, r *http.Request) {
 	io.Copy(w, rc)
 }
 
-// --- Query API ---
+// --- v2 Query API ---
 
-func (s *Server) handleListWorkItems(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleListWorkItemsV2(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
 	filter := store.WorkItemFilter{}
 
-	if v := r.URL.Query().Get("status"); v != "" {
+	if v := q.Get("status"); v != "" {
 		filter.Status = v
 	}
-	if v := r.URL.Query().Get("kind"); v != "" {
+	if v := q.Get("kind"); v != "" {
 		filter.Kind = v
 	}
-	if v := r.URL.Query().Get("label"); v != "" {
+	if v := q.Get("label"); v != "" {
 		filter.Label = v
 	}
-	if v := r.URL.Query().Get("q"); v != "" {
+	if v := q.Get("claimed_by"); v != "" {
+		filter.ClaimedBy = domain.ActorID(v)
+	}
+	if v := q.Get("blocked"); v != "" {
+		b := v == "true"
+		filter.Blocked = &b
+	}
+	if v := q.Get("q"); v != "" {
 		filter.Query = v
+	}
+	if v := q.Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			filter.Limit = n
+		}
+	}
+	if v := q.Get("offset"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			filter.Offset = n
+		}
+	}
+
+	// ready=true: open-category statuses + no lease + not blocked
+	if q.Get("ready") == "true" {
+		meta, err := s.db.GetCurrentMeta(r.Context())
+		if err != nil {
+			s.jsonError(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		if meta != nil {
+			var openStatuses []string
+			for _, wf := range meta.Workflows {
+				for _, st := range wf.Statuses {
+					if st.Category == "open" {
+						openStatuses = append(openStatuses, st.Slug)
+					}
+				}
+			}
+			filter.Statuses = openStatuses
+		}
+		blocked := false
+		filter.Blocked = &blocked
+		// lease_holder IS NULL is handled by checking ClaimedBy is empty + adding explicit NULL condition
+		// We add a special Statuses filter and rely on the store to also filter lease_holder IS NULL
+		// For simplicity, use the Ready flag
+		ready := true
+		filter.Ready = &ready
 	}
 
 	items, err := s.db.ListWorkItems(r.Context(), filter)
@@ -199,45 +246,13 @@ func (s *Server) handleListWorkItems(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	type workItemJSON struct {
-		ID        string   `json:"id"`
-		SharedID  string   `json:"shared_id,omitempty"`
-		Kind      string   `json:"kind"`
-		Title     string   `json:"title"`
-		Status    string   `json:"status"`
-		Priority  string   `json:"priority"`
-		Labels    []string `json:"labels"`
-		Blocked   bool     `json:"blocked,omitempty"`
-		CreatedBy string   `json:"created_by"`
-		CreatedAt string   `json:"created_at"`
-		UpdatedAt string   `json:"updated_at"`
-	}
-
-	result := make([]workItemJSON, 0, len(items))
-	for _, wi := range items {
-		result = append(result, workItemJSON{
-			ID:        string(wi.ID),
-			SharedID:  string(wi.SharedID),
-			Kind:      wi.Kind,
-			Title:     wi.Title,
-			Status:    wi.Status,
-			Priority:  wi.Priority,
-			Labels:    wi.Labels,
-			Blocked:   wi.Blocked,
-			CreatedBy: string(wi.CreatedBy),
-			CreatedAt: wi.CreatedAt.Format("2006-01-02T15:04:05Z"),
-			UpdatedAt: wi.UpdatedAt.Format("2006-01-02T15:04:05Z"),
-		})
-	}
-
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{"work_items": result, "count": len(result)})
+	json.NewEncoder(w).Encode(map[string]any{"work_items": items, "count": len(items)})
 }
 
-func (s *Server) handleGetWorkItem(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleGetWorkItemV2(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 
-	// Try shared ID first, then canonical.
 	wi, err := s.db.GetWorkItemBySharedID(r.Context(), domain.SharedID(id))
 	if err != nil {
 		s.jsonError(w, "internal error", http.StatusInternalServerError)
@@ -259,6 +274,127 @@ func (s *Server) handleGetWorkItem(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(wi)
 }
 
+func (s *Server) handleWorkItemEvents(w http.ResponseWriter, r *http.Request) {
+	wi := s.resolveWorkItem(w, r)
+	if wi == nil {
+		return
+	}
+
+	q := r.URL.Query()
+	filter := store.EventFilter{
+		WorkItemID: wi.ID,
+		Limit:      100,
+	}
+	if v := q.Get("since"); v != "" {
+		if t, err := time.Parse(time.RFC3339, v); err == nil {
+			filter.Since = t
+		}
+	}
+	if v := q.Get("type"); v != "" {
+		filter.Type = domain.EventType(v)
+	}
+
+	events, err := s.db.ListEvents(r.Context(), filter)
+	if err != nil {
+		s.jsonError(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"events": events, "count": len(events)})
+}
+
+func (s *Server) handleWorkItemArtifacts(w http.ResponseWriter, r *http.Request) {
+	wi := s.resolveWorkItem(w, r)
+	if wi == nil {
+		return
+	}
+
+	q := r.URL.Query()
+	artType := q.Get("type")
+	role := q.Get("role")
+
+	artifacts := wi.Artifacts
+	if artType != "" || role != "" {
+		var filtered []domain.Artifact
+		for _, a := range artifacts {
+			if artType != "" && a.ArtifactType != artType {
+				continue
+			}
+			if role != "" && a.SemanticRole != role {
+				continue
+			}
+			filtered = append(filtered, a)
+		}
+		artifacts = filtered
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"artifacts": artifacts, "count": len(artifacts)})
+}
+
+func (s *Server) handleWorkItemAttempts(w http.ResponseWriter, r *http.Request) {
+	wi := s.resolveWorkItem(w, r)
+	if wi == nil {
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"attempts": wi.Attempts, "count": len(wi.Attempts)})
+}
+
+func (s *Server) handleWorkItemCheckpoints(w http.ResponseWriter, r *http.Request) {
+	wi := s.resolveWorkItem(w, r)
+	if wi == nil {
+		return
+	}
+
+	checkpoints := wi.Checkpoints
+	if attemptID := r.URL.Query().Get("attempt_id"); attemptID != "" {
+		var filtered []domain.Checkpoint
+		for _, cp := range checkpoints {
+			if string(cp.AttemptID) == attemptID {
+				filtered = append(filtered, cp)
+			}
+		}
+		checkpoints = filtered
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"checkpoints": checkpoints, "count": len(checkpoints)})
+}
+
+func (s *Server) handleListEvents(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	filter := store.EventFilter{Limit: 100}
+
+	if v := q.Get("since"); v != "" {
+		if t, err := time.Parse(time.RFC3339, v); err == nil {
+			filter.Since = t
+		}
+	}
+	if v := q.Get("type"); v != "" {
+		filter.Type = domain.EventType(v)
+	}
+	if v := q.Get("actor_id"); v != "" {
+		filter.ActorID = domain.ActorID(v)
+	}
+	if v := q.Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			filter.Limit = n
+		}
+	}
+
+	events, err := s.db.ListEvents(r.Context(), filter)
+	if err != nil {
+		s.jsonError(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"events": events, "count": len(events)})
+}
+
 func (s *Server) handleGetMeta(w http.ResponseWriter, r *http.Request) {
 	meta, err := s.db.GetCurrentMeta(r.Context())
 	if err != nil {
@@ -272,6 +408,30 @@ func (s *Server) handleGetMeta(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(meta)
+}
+
+// --- Helpers ---
+
+func (s *Server) resolveWorkItem(w http.ResponseWriter, r *http.Request) *domain.WorkItem {
+	id := chi.URLParam(r, "id")
+
+	wi, err := s.db.GetWorkItemBySharedID(r.Context(), domain.SharedID(id))
+	if err != nil {
+		s.jsonError(w, "internal error", http.StatusInternalServerError)
+		return nil
+	}
+	if wi == nil {
+		wi, err = s.db.GetWorkItem(r.Context(), domain.WorkItemID(id))
+		if err != nil {
+			s.jsonError(w, "internal error", http.StatusInternalServerError)
+			return nil
+		}
+	}
+	if wi == nil {
+		s.jsonError(w, "work item not found", http.StatusNotFound)
+		return nil
+	}
+	return wi
 }
 
 func (s *Server) jsonError(w http.ResponseWriter, msg string, code int) {

@@ -485,6 +485,14 @@ func (s *Store) ListWorkItems(ctx context.Context, filter store.WorkItemFilter) 
 		conditions = append(conditions, "w.status = ?")
 		args = append(args, filter.Status)
 	}
+	if len(filter.Statuses) > 0 {
+		placeholders := make([]string, len(filter.Statuses))
+		for i, s := range filter.Statuses {
+			placeholders[i] = "?"
+			args = append(args, s)
+		}
+		conditions = append(conditions, fmt.Sprintf("w.status IN (%s)", strings.Join(placeholders, ",")))
+	}
 	if filter.Kind != "" {
 		conditions = append(conditions, "w.kind = ?")
 		args = append(args, filter.Kind)
@@ -498,6 +506,13 @@ func (s *Store) ListWorkItems(ctx context.Context, filter store.WorkItemFilter) 
 		query += " JOIN work_item_assignees wa ON w.id = wa.work_item_id"
 		conditions = append(conditions, "wa.actor_id = ?")
 		args = append(args, filter.Assignee)
+	}
+	if filter.ClaimedBy != "" {
+		conditions = append(conditions, "w.lease_holder = ?")
+		args = append(args, string(filter.ClaimedBy))
+	}
+	if filter.Ready != nil && *filter.Ready {
+		conditions = append(conditions, "w.lease_holder IS NULL")
 	}
 	if filter.Blocked != nil {
 		conditions = append(conditions, "w.blocked = ?")
@@ -1160,4 +1175,91 @@ func (s *Store) GetPrivateLabels(ctx context.Context, workItemID domain.WorkItem
 		labels = append(labels, l)
 	}
 	return labels, rows.Err()
+}
+
+// --- Query API ---
+
+func (s *Store) ListEvents(ctx context.Context, filter store.EventFilter) ([]domain.Event, error) {
+	query := `SELECT id, work_item_id, type, payload, meta_version, actor_id, timestamp, emitted_by, signature FROM events`
+	var conditions []string
+	var args []any
+
+	if filter.WorkItemID != "" {
+		conditions = append(conditions, "work_item_id = ?")
+		args = append(args, string(filter.WorkItemID))
+	}
+	if !filter.Since.IsZero() {
+		conditions = append(conditions, "timestamp > ?")
+		args = append(args, filter.Since.UTC().Format(time.RFC3339Nano))
+	}
+	if filter.Type != "" {
+		conditions = append(conditions, "type = ?")
+		args = append(args, string(filter.Type))
+	}
+	if filter.ActorID != "" {
+		conditions = append(conditions, "actor_id = ?")
+		args = append(args, string(filter.ActorID))
+	}
+
+	if len(conditions) > 0 {
+		query += " WHERE " + strings.Join(conditions, " AND ")
+	}
+	query += " ORDER BY timestamp"
+
+	limit := filter.Limit
+	if limit <= 0 {
+		limit = 100
+	}
+	query += fmt.Sprintf(" LIMIT %d", limit)
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var events []domain.Event
+	for rows.Next() {
+		e, err := scanEventRows(rows)
+		if err != nil {
+			return nil, err
+		}
+		parents, err := s.getParents(ctx, e.ID)
+		if err != nil {
+			return nil, err
+		}
+		e.ParentEventIDs = parents
+		events = append(events, *e)
+	}
+	return events, rows.Err()
+}
+
+func (s *Store) GetArtifactsByHash(ctx context.Context, contentHash string) ([]domain.Artifact, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT artifact_id, content_hash, filename, mime_type, size_bytes, artifact_type, semantic_role, produced_by, added_by, added_at
+		 FROM work_item_artifacts WHERE content_hash = ? ORDER BY added_at`, contentHash)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var artifacts []domain.Artifact
+	for rows.Next() {
+		var a domain.Artifact
+		var ts string
+		var producedBy sql.NullString
+		if err := rows.Scan(&a.ID, &a.ContentHash, &a.Filename, &a.MimeType, &a.SizeBytes,
+			&a.ArtifactType, &a.SemanticRole, &producedBy, &a.AddedBy, &ts); err != nil {
+			return nil, err
+		}
+		a.AddedAt, _ = time.Parse(time.RFC3339Nano, ts)
+		if producedBy.Valid {
+			var pb domain.ProducedBy
+			if err := json.Unmarshal([]byte(producedBy.String), &pb); err == nil {
+				a.ProducedBy = &pb
+			}
+		}
+		artifacts = append(artifacts, a)
+	}
+	return artifacts, rows.Err()
 }

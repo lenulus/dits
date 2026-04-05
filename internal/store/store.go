@@ -3,19 +3,31 @@ package store
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/lenulus/pf/internal/domain"
 )
 
 type WorkItemFilter struct {
-	Status   string
-	Kind     string
-	Label    string
-	Assignee domain.ActorID
-	Blocked  *bool
-	Query    string // free-text search on title/body
-	Limit    int
-	Offset   int
+	Status    string
+	Statuses  []string // multi-status match (OR); used by ready=true
+	Kind      string
+	Label     string
+	Assignee  domain.ActorID
+	ClaimedBy domain.ActorID // filter by lease holder
+	Blocked   *bool
+	Ready     *bool // open-category + no lease + not blocked
+	Query     string
+	Limit     int
+	Offset    int
+}
+
+type EventFilter struct {
+	WorkItemID domain.WorkItemID
+	Since      time.Time
+	Type       domain.EventType
+	ActorID    domain.ActorID
+	Limit      int
 }
 
 type EventStore interface {
@@ -26,6 +38,7 @@ type EventStore interface {
 	GetAllHeads(ctx context.Context) ([]domain.EventID, error)
 	HasEvent(ctx context.Context, id domain.EventID) (bool, error)
 	GetAffectedWorkItemIDs(ctx context.Context, events []domain.Event) ([]domain.WorkItemID, error)
+	ListEvents(ctx context.Context, filter EventFilter) ([]domain.Event, error)
 }
 
 type WorkItemStore interface {
@@ -34,6 +47,7 @@ type WorkItemStore interface {
 	GetWorkItemBySharedID(ctx context.Context, id domain.SharedID) (*domain.WorkItem, error)
 	ListWorkItems(ctx context.Context, filter WorkItemFilter) ([]domain.WorkItem, error)
 	AllocateSharedID(ctx context.Context, workItemID domain.WorkItemID, projectKey string) (domain.SharedID, error)
+	GetArtifactsByHash(ctx context.Context, contentHash string) ([]domain.Artifact, error)
 }
 
 type MetaStore interface {

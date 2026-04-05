@@ -22,7 +22,8 @@ func Execute() {
 
 func init() {
 	rootCmd.AddCommand(initCmd)
-	rootCmd.AddCommand(issueCmd)
+	rootCmd.AddCommand(workCmd)
+	rootCmd.AddCommand(issueCmd) // alias: dits issue create = dits work create --kind=issue
 	rootCmd.AddCommand(syncCmd)
 	rootCmd.AddCommand(remoteCmd)
 	rootCmd.AddCommand(metaCmd)
