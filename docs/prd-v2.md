@@ -2,7 +2,7 @@
 
 **Status:** Draft
 **Author:** Anthony Laforge
-**Version:** 0.2
+**Version:** 0.3
 **Branch:** v2
 
 ---
@@ -15,7 +15,7 @@ But the domain model is shaped like Jira. The primary object is an issue. The ev
 
 Agents do not think in tickets. They work on investigations, plans, execution runs, reviews, handoffs, remediation actions, decision threads. When the primitive is "issue," everything gets squeezed into ticketing semantics. Comments become scratch state. Status becomes a lossy compression of execution progress. Attachments become undifferentiated blobs.
 
-The engine is already the hard part. The limitation is the semantic layer.
+v1 treats coordination as a **stateful record of work** — things happened, here is the history. v2 treats it as a **durable coordination substrate for multiple actors, including agents** — here is the live state, here is who owns what, here is what is ready. The engine is already the hard part. The limitation is the semantic layer.
 
 v2 keeps the engine. Changes the center of gravity.
 
@@ -366,7 +366,7 @@ type Event struct {
 
 ### 7.1 Lease Model
 
-A claim creates a lease with an expiration time. Leases are materialized into a coordination table.
+Leasing a work item creates a lease with an expiration time. Leases are materialized into a coordination table.
 
 **Rules:**
 - Only one active lease per work item at a time
@@ -556,14 +556,16 @@ func DefaultMetaConfig(projectKey string) MetaConfig {
                     {Slug: "closed", Name: "Closed", Category: "done"},
                 },
             },
+            // NOTE: Execution workflow statuses are human-facing reporting states,
+            // not authoritative operational truth. The actual lease, attempt, and
+            // blocked state lives in first-class coordination fields. These statuses
+            // exist so humans and dashboards can see a simplified progression.
             {
                 Slug: "execution",
                 Name: "Execution",
                 Statuses: []WorkflowStatus{
                     {Slug: "pending", Name: "Pending", Category: "open"},
-                    {Slug: "claimed", Name: "Claimed", Category: "in_progress"},
-                    {Slug: "running", Name: "Running", Category: "in_progress"},
-                    {Slug: "blocked", Name: "Blocked", Category: "in_progress"},
+                    {Slug: "active", Name: "Active", Category: "in_progress"},
                     {Slug: "completed", Name: "Completed", Category: "done"},
                     {Slug: "failed", Name: "Failed", Category: "done"},
                 },
@@ -659,7 +661,7 @@ Returns work items where:
 
 This is the "what should I do next?" query for agents.
 
-**Note:** This is v2 baseline readiness. Future versions may evolve this into policy-driven readiness that also considers dependency satisfaction, required review completion, missing artifacts, and lease policy constraints. The current definition is intentionally simple and should not be over-relied upon for complex workflow orchestration.
+**Note:** This is v2 baseline readiness — a query convenience, not a universal scheduler truth. It answers a narrow question ("is anything obviously preventing work from starting?"), not a complete planning predicate. Future versions may evolve this into policy-driven readiness that also considers dependency satisfaction, required review completion, missing artifacts, and lease policy constraints.
 
 ---
 
@@ -670,7 +672,7 @@ This is the "what should I do next?" query for agents.
 Rewrite the domain layer. New primary object is `WorkItem`. New event types for lifecycle and execution.
 
 **Scope:**
-- `internal/domain/workitem.go` — WorkItem, Artifact, ProducedBy, Checkpoint, Observation, Claim, ExecutionAttempt
+- `internal/domain/workitem.go` — WorkItem, Artifact, EmittedBy, ProducedBy, Checkpoint, Observation, Finding, ExecutionAttempt
 - `internal/domain/event.go` — all `work.*` event type constants and payload structs
 - `internal/domain/identity.go` — WorkItemID, ArtifactID, LeaseID, AttemptID generators
 - `internal/domain/reduce.go` — new reducer for WorkItem from `work.*` events
@@ -711,8 +713,8 @@ Rich artifacts, provenance metadata, and agent-oriented query endpoints.
 CLI commands for the new domain, plus full integration testing.
 
 **Scope:**
-- `dits work create`, `dits work list`, `dits work show`, `dits work claim`, `dits work release`, `dits work checkpoint`, `dits work complete`, `dits work fail`, `dits work review`, `dits work handoff`
-- `dits work observe`, `dits work evidence`, `dits work plan`
+- `dits work create`, `dits work list`, `dits work show`, `dits work lease`, `dits work lease-release`, `dits work checkpoint`, `dits work complete`, `dits work fail`, `dits work review`, `dits work handoff`
+- `dits work observe`, `dits work evidence`, `dits work finding`, `dits work plan`
 - `dits issue` as alias for `dits work --kind=issue`
 - E2E test: two agents coordinating via leases and checkpoints through server
 - Documentation updates
@@ -733,6 +735,8 @@ These hold at all times, regardless of event ordering or node topology:
 6. **Operational state is independent of status** — lease, attempt, and blocked state do not imply or require a particular workflow status
 7. **Events are immutable** — no event is ever modified or deleted after creation
 8. **The coordination table is a rebuildable cache** — it can be dropped and reconstructed from events + wall-clock time
+9. **Attempt IDs are globally unique, attempt numbers are monotonic per work item** — attempt 3 always follows attempt 2; no gaps, no reordering
+10. **ReviewIDs and HandoffIDs uniquely identify durable sub-entities** — they are not ephemeral references but first-class objects within a work item's history, supporting concurrent reviews and handoffs
 
 ---
 
