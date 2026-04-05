@@ -6,7 +6,7 @@
 dits [command]
 ```
 
-DITS is a local-first, event-sourced distributed issue tracker.
+DITS is a local-first, event-sourced distributed coordination system.
 
 ---
 
@@ -26,27 +26,29 @@ Creates `.dits/` with `config.json`, `identity.json` (Ed25519 keypair), `dits.db
 
 ---
 
-## dits issue
+## dits work
 
-### dits issue create
+Primary command tree for managing work items.
+
+### dits work create
 
 ```
-dits issue create --title <title> [flags]
+dits work create --title <title> [flags]
 ```
 
 | Flag | Short | Required | Default | Description |
 |------|-------|----------|---------|-------------|
-| `--title` | `-t` | Yes | | Issue title |
-| `--body` | `-b` | No | | Issue description |
+| `--title` | `-t` | Yes | | Work item title |
+| `--body` | `-b` | No | | Description |
 | `--label` | `-l` | No | | Labels (comma-separated or repeated) |
-| `--type` | | No | `task` | Issue type slug |
+| `--kind` | `-k` | No | `task` | Work kind (task, issue, investigation, execution, plan, decision, handoff, artifact_review) |
 
-Labels are validated against meta config. Type must exist in meta.
+Kind is validated against meta config.
 
-### dits issue list
+### dits work list
 
 ```
-dits issue list [flags]
+dits work list [flags]
 ```
 
 Aliases: `ls`
@@ -54,146 +56,182 @@ Aliases: `ls`
 | Flag | Short | Default | Description |
 |------|-------|---------|-------------|
 | `--status` | `-s` | | Filter by status |
-| `--all` | `-a` | `false` | Include closed issues |
+| `--kind` | `-k` | | Filter by kind |
+| `--all` | `-a` | `false` | Include closed work items |
 | `--json` | | `false` | Output as JSON |
 
-### dits issue show
+### dits work show
 
 ```
-dits issue show <issue-id> [flags]
+dits work show <id> [flags]
 ```
 
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--json` | `false` | Output as JSON |
 
-Accepts shared ID (`PROJ-1`) or canonical ID (`iss_01...`). Displays issue details, labels, assignees, relations, attachments, comments, and local overlay data.
+Accepts shared ID (`PROJ-1`) or canonical ID (`wrk_01...`). Displays full work item details including coordination state, artifacts, attempts, checkpoints, observations, findings, comments, and local overlay data.
 
-### dits issue comment
-
-```
-dits issue comment <issue-id> --body <text>
-```
-
-| Flag | Short | Required | Description |
-|------|-------|----------|-------------|
-| `--body` | `-b` | Yes | Comment text |
-
-### dits issue close
+### dits work comment
 
 ```
-dits issue close <issue-id>
+dits work comment <id> --body <text>
 ```
 
-### dits issue reopen
+### dits work close
 
 ```
-dits issue reopen <issue-id>
+dits work close <id>
 ```
 
-### dits issue status
+### dits work reopen
 
 ```
-dits issue status <issue-id> <status>
+dits work reopen <id>
 ```
 
-Status is validated against the meta workflow. Available statuses by default: `open`, `in_progress`, `closed`.
-
-### dits issue label-add
+### dits work status
 
 ```
-dits issue label-add <issue-id> <label-slug>
+dits work status <id> <status>
 ```
 
-Label must exist in meta config.
+Status is validated against the meta workflow. Available statuses depend on the work item's kind and its associated workflow.
 
-### dits issue label-remove
-
-```
-dits issue label-remove <issue-id> <label-slug>
-```
-
-### dits issue assign
+### dits work label-add / label-remove
 
 ```
-dits issue assign <issue-id> <actor-id>
+dits work label-add <id> <label-slug>
+dits work label-remove <id> <label-slug>
 ```
 
-### dits issue unassign
+### dits work assign / unassign
 
 ```
-dits issue unassign <issue-id> <actor-id>
+dits work assign <id> <actor-id>
+dits work unassign <id> <actor-id>
 ```
 
-### dits issue link
+### dits work link / unlink
 
 ```
-dits issue link <issue-id> <relation-type> <target-issue-id>
+dits work link <id> <relation-type> <target-id>
+dits work unlink <id> <relation-type> <target-id>
 ```
 
-Relation type is freeform (e.g., `blocks`, `relates_to`, `duplicates`).
+Relation type is validated against meta config. Default types: `blocks`, `blocked_by`, `depends_on`, `parent_of`, `child_of`, `relates_to`, `duplicates`, `derived_from`, `supersedes`.
 
-### dits issue unlink
-
-```
-dits issue unlink <issue-id> <relation-type> <target-issue-id>
-```
-
-### dits issue attach
+### dits work attach / detach
 
 ```
-dits issue attach <issue-id> <file-path>
+dits work attach <id> <file-path>
+dits work detach <id> <artifact-id>
 ```
 
-Computes SHA256 hash, stores blob locally, creates `attachment_added` event. Max file size: 50MB.
+Computes SHA256 hash, stores blob locally, creates `artifact_added` event. Max file size: 50MB.
 
-### dits issue attachments
+---
 
-```
-dits issue attachments <issue-id>
-```
+## Coordination Commands
 
-Lists all attachments with ID, filename, size, MIME type, and content hash.
-
-### dits issue detach
+### dits work lease
 
 ```
-dits issue detach <issue-id> <attachment-id>
+dits work lease <id>
 ```
 
-### dits issue annotate
+Leases a work item. Duration determined by meta lease policy for the work kind (default 300s). Fails if already leased.
+
+### dits work lease-release
 
 ```
-dits issue annotate <issue-id> <key> <value>
+dits work lease-release <id> [--reason <text>]
 ```
 
-Sets a local annotation (key-value pair). Not synced.
-
-### dits issue annotations
+### dits work start
 
 ```
-dits issue annotations <issue-id>
+dits work start <id>
 ```
 
-### dits issue annotate-delete
+Starts a new execution attempt. Generates AttemptID and computes attempt number from existing attempts.
+
+### dits work complete
 
 ```
-dits issue annotate-delete <issue-id> <key>
+dits work complete <id> [--summary <text>]
 ```
 
-### dits issue private-label-add
+Completes the current execution attempt. Requires an active attempt.
+
+### dits work fail
 
 ```
-dits issue private-label-add <issue-id> <label>
+dits work fail <id> --error <msg> [--retryable]
 ```
 
-Private labels are local-only and not synced. No validation against meta.
+Fails the current execution attempt. `--retryable` signals that a new attempt is appropriate.
 
-### dits issue private-label-remove
+### dits work checkpoint
 
 ```
-dits issue private-label-remove <issue-id> <label>
+dits work checkpoint <id> --summary <text> [--progress <float>]
 ```
+
+Records a checkpoint on the current attempt. Progress is 0.0 - 1.0.
+
+### dits work block / unblock
+
+```
+dits work block <id> --reason <text>
+dits work unblock <id> [--reason <text>]
+```
+
+### dits work observe
+
+```
+dits work observe <id> --summary <text>
+```
+
+Records an observation (unstructured note about something noticed).
+
+### dits work finding
+
+```
+dits work finding <id> --statement <text> [--confidence <float>]
+```
+
+Records a structured finding (epistemic assertion). Confidence is 0.0 - 1.0, default 0.5.
+
+### dits work plan
+
+```
+dits work plan <id> --summary <text> --plan <text>
+```
+
+Proposes a plan for the work item.
+
+### dits work handoff
+
+```
+dits work handoff <id> --to <actor-id> --context <text>
+```
+
+Hands off the work item to another actor.
+
+### dits work review
+
+```
+dits work review <id> --scope <text>
+```
+
+Requests a review of the work item.
+
+---
+
+## dits issue
+
+Alias for `dits work` commands. `dits issue create` defaults to `--kind issue`. All subcommands from v1 are preserved: create, list, show, comment, close, reopen, status, label-add, label-remove, assign, unassign, link, unlink, attach, attachments, detach, annotate, annotations, annotate-delete, private-label-add, private-label-remove.
 
 ---
 
@@ -235,63 +273,29 @@ dits remote show
 dits meta show
 ```
 
-Displays project key, version, labels, workflows, issue types, and priorities.
+Displays project key, version, work kinds, workflows, labels, priorities, artifact types, evidence types, relation types, and policies.
 
-### dits meta label add
-
-```
-dits meta label add --slug <slug> [flags]
-```
-
-| Flag | Required | Description |
-|------|----------|-------------|
-| `--slug` | Yes | Label identifier |
-| `--name` | No | Display name (defaults to slug) |
-| `--color` | No | Hex color code |
-
-### dits meta label remove
+### dits meta label add / remove / list
 
 ```
+dits meta label add --slug <slug> [--name <name>] [--color <hex>]
 dits meta label remove <slug>
-```
-
-### dits meta label list
-
-```
 dits meta label list
 ```
 
-Aliases: `ls`
-
-### dits meta type add
+### dits meta type add / list
 
 ```
-dits meta type add --slug <slug> [flags]
-```
-
-| Flag | Required | Default | Description |
-|------|----------|---------|-------------|
-| `--slug` | Yes | | Type identifier |
-| `--name` | No | slug | Display name |
-| `--workflow` | No | `default` | Associated workflow |
-
-### dits meta type list
-
-```
+dits meta type add --slug <slug> [--name <name>] [--workflow <slug>]
 dits meta type list
 ```
 
-### dits meta workflow show
+Adds/lists work kinds. Default workflow: `default`.
+
+### dits meta workflow show / list
 
 ```
 dits meta workflow show [slug]
-```
-
-Defaults to `default` workflow. Shows statuses and transitions.
-
-### dits meta workflow list
-
-```
 dits meta workflow list
 ```
 

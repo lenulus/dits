@@ -49,7 +49,7 @@ curl -X POST http://localhost:8484/api/v1/sync \
 | Field | Type | Description |
 |-------|------|-------------|
 | `events` | Event[] | Events the client is missing |
-| `shared_ids` | object | Map of canonical ID -> shared ID for new/pulled issues |
+| `shared_ids` | object | Map of work item ID -> shared ID |
 | `heads` | string[] | Server's current DAG head event IDs |
 | `meta` | MetaConfig | Server's meta config (if newer than client's) |
 
@@ -58,13 +58,14 @@ curl -X POST http://localhost:8484/api/v1/sync \
 | Field | Type | Description |
 |-------|------|-------------|
 | `id` | string | Event ID (`evt_<ULID>`) |
-| `issue_id` | string | Issue canonical ID (`iss_<ULID>`) |
-| `type` | string | Event type (e.g., `issue.created`) |
+| `work_item_id` | string | Work item ID (`wrk_<ULID>`) |
+| `type` | string | Event type (e.g., `work.created`) |
 | `parent_event_ids` | string[] | Parent event IDs in the DAG |
 | `meta_version` | integer | Meta version at creation time |
 | `actor_id` | string | Actor who created the event |
 | `timestamp` | string | RFC3339 timestamp (UTC) |
 | `payload` | object | Type-specific payload |
+| `emitted_by` | object | Optional event-level provenance |
 | `signature` | string | Base64-encoded Ed25519 signature |
 
 ---
@@ -81,40 +82,20 @@ curl -X POST http://localhost:8484/api/v1/blobs/check \
   -d '{"hashes":["sha256:abcdef...","sha256:123456..."]}'
 ```
 
-**Request Body:**
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `hashes` | string[] | Content hashes to check |
-
-**Response Body:**
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `present` | string[] | Hashes that exist on server |
-| `missing` | string[] | Hashes that need uploading |
+**Response:**
+```json
+{"present": ["sha256:abcdef..."], "missing": ["sha256:123456..."]}
+```
 
 ### PUT /api/v1/blobs/{hash}
 
-Upload a blob.
+Upload a blob. Max 50MB. Server verifies content matches hash.
 
 ```bash
 curl -X PUT http://localhost:8484/api/v1/blobs/sha256:abcdef... \
   -H "Content-Type: application/octet-stream" \
   --data-binary @file.png
 ```
-
-**Path Parameters:**
-
-| Parameter | Description |
-|-----------|-------------|
-| `hash` | Content hash (`sha256:<hex>`) |
-
-**Request Body:** Raw binary data. Max 50MB.
-
-**Response:** `{"status": "ok", "hash": "sha256:..."}` (200) or error (400).
-
-The server verifies the uploaded content matches the hash. Mismatches are rejected.
 
 ### GET /api/v1/blobs/{hash}
 
@@ -124,114 +105,158 @@ Download a blob.
 curl http://localhost:8484/api/v1/blobs/sha256:abcdef... -o file.png
 ```
 
-**Response:** Raw binary data with `Content-Type: application/octet-stream`. 404 if not found.
-
 ---
 
-## Query API
+## v2 Query API
 
-Read-only endpoints for querying issues and meta configuration.
+Agent-oriented read-only endpoints for querying work items, events, and coordination state.
 
-### GET /api/v1/issues
+### GET /api/v2/work
 
-List issues with optional filtering.
+List work items with filtering.
 
 ```bash
-# All issues
-curl http://localhost:8484/api/v1/issues
+# All work items
+curl http://localhost:8484/api/v2/work
+
+# Filter by kind
+curl http://localhost:8484/api/v2/work?kind=execution
 
 # Filter by status
-curl http://localhost:8484/api/v1/issues?status=open
+curl http://localhost:8484/api/v2/work?status=open
 
-# Filter by label
-curl http://localhost:8484/api/v1/issues?label=bug
+# Ready items (open, unleased, unblocked)
+curl http://localhost:8484/api/v2/work?ready=true
+
+# Blocked items
+curl http://localhost:8484/api/v2/work?blocked=true
+
+# Claimed by actor
+curl http://localhost:8484/api/v2/work?claimed_by=actor_abc...
 
 # Free-text search
-curl http://localhost:8484/api/v1/issues?q=login
+curl http://localhost:8484/api/v2/work?q=deploy
 ```
 
 **Query Parameters:**
 
 | Parameter | Description |
 |-----------|-------------|
-| `status` | Filter by status (e.g., `open`, `closed`) |
+| `kind` | Filter by work kind |
+| `status` | Filter by status |
 | `label` | Filter by label slug |
+| `claimed_by` | Filter by lease holder (actor ID) |
+| `blocked` | `true` or `false` |
+| `ready` | `true` — open-category status, no lease, not blocked |
 | `q` | Free-text search on title and body |
+| `limit` | Max results |
+| `offset` | Pagination offset |
 
 **Response:**
 ```json
 {
   "count": 2,
-  "issues": [
-    {
-      "id": "iss_01...",
-      "shared_id": "PROJ-1",
-      "title": "Fix login",
-      "status": "open",
-      "type": "task",
-      "priority": "medium",
-      "labels": ["bug"],
-      "created_by": "actor_abc...",
-      "created_at": "2026-03-29T10:00:00Z",
-      "updated_at": "2026-03-29T12:00:00Z"
-    }
-  ]
+  "work_items": [...]
 }
 ```
 
-### GET /api/v1/issues/{id}
+### GET /api/v2/work/{id}
 
-Get full issue details.
+Get full work item details including all collections.
 
 ```bash
-curl http://localhost:8484/api/v1/issues/PROJ-1
+curl http://localhost:8484/api/v2/work/PROJ-1
 ```
 
-**Path Parameters:**
+Accepts shared ID (`PROJ-1`) or canonical ID (`wrk_01...`).
+
+### GET /api/v2/work/{id}/events
+
+Event stream for a work item.
+
+```bash
+curl http://localhost:8484/api/v2/work/PROJ-1/events
+curl http://localhost:8484/api/v2/work/PROJ-1/events?type=work.checkpointed
+curl http://localhost:8484/api/v2/work/PROJ-1/events?since=2026-04-01T00:00:00Z
+```
 
 | Parameter | Description |
 |-----------|-------------|
-| `id` | Shared ID (`PROJ-1`) or canonical ID (`iss_01...`) |
+| `type` | Filter by event type |
+| `since` | Events after this RFC3339 timestamp |
 
-**Response:** Full issue object including comments, attachments, relations, assignees, labels.
+### GET /api/v2/work/{id}/artifacts
 
-### GET /api/v1/meta
+Artifacts for a work item, optionally filtered.
+
+```bash
+curl http://localhost:8484/api/v2/work/PROJ-1/artifacts
+curl http://localhost:8484/api/v2/work/PROJ-1/artifacts?type=log
+curl http://localhost:8484/api/v2/work/PROJ-1/artifacts?role=evidence
+```
+
+| Parameter | Description |
+|-----------|-------------|
+| `type` | Filter by artifact type |
+| `role` | Filter by semantic role |
+
+### GET /api/v2/work/{id}/attempts
+
+Execution attempts for a work item.
+
+```bash
+curl http://localhost:8484/api/v2/work/PROJ-1/attempts
+```
+
+### GET /api/v2/work/{id}/checkpoints
+
+Checkpoints for a work item, optionally filtered by attempt.
+
+```bash
+curl http://localhost:8484/api/v2/work/PROJ-1/checkpoints
+curl http://localhost:8484/api/v2/work/PROJ-1/checkpoints?attempt_id=atp_01...
+```
+
+### GET /api/v2/events
+
+Cross-item event query.
+
+```bash
+curl http://localhost:8484/api/v2/events
+curl http://localhost:8484/api/v2/events?type=work.created
+curl http://localhost:8484/api/v2/events?actor_id=actor_abc...
+curl http://localhost:8484/api/v2/events?since=2026-04-01T00:00:00Z&limit=50
+```
+
+| Parameter | Description |
+|-----------|-------------|
+| `type` | Filter by event type |
+| `actor_id` | Filter by actor |
+| `since` | Events after this RFC3339 timestamp |
+| `limit` | Max results (default 100) |
+
+### GET /api/v2/meta
 
 Get current meta configuration.
 
 ```bash
-curl http://localhost:8484/api/v1/meta
+curl http://localhost:8484/api/v2/meta
 ```
 
 **Response:**
 ```json
 {
-  "version": 3,
+  "version": 1,
   "project_key": "PROJ",
-  "labels": [
-    {"slug": "bug", "name": "Bug", "color": "#ff0000"}
-  ],
-  "workflows": [
-    {
-      "slug": "default",
-      "name": "Default",
-      "statuses": [
-        {"slug": "open", "name": "Open", "category": "open"},
-        {"slug": "in_progress", "name": "In Progress", "category": "in_progress"},
-        {"slug": "closed", "name": "Closed", "category": "done"}
-      ],
-      "transitions": [
-        {"from": "*", "to": "open"},
-        {"from": "*", "to": "in_progress"},
-        {"from": "*", "to": "closed"}
-      ]
-    }
-  ],
-  "issue_types": [
-    {"slug": "task", "name": "Task", "workflow_slug": "default"},
-    {"slug": "bug", "name": "Bug", "workflow_slug": "default"}
-  ],
-  "priorities": ["low", "medium", "high", "critical"]
+  "work_kinds": [...],
+  "workflows": [...],
+  "priorities": ["low", "medium", "high", "critical"],
+  "labels": [],
+  "artifact_types": [...],
+  "evidence_types": [...],
+  "relation_types": [...],
+  "lease_policies": [...],
+  "review_policies": []
 }
 ```
 
@@ -248,5 +273,5 @@ All errors return JSON:
 | Status | Meaning |
 |--------|---------|
 | 400 | Bad request (malformed JSON, hash mismatch, validation failure) |
-| 404 | Not found (issue, blob, or meta doesn't exist) |
+| 404 | Not found (work item, blob, or meta doesn't exist) |
 | 500 | Internal server error |

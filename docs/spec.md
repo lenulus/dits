@@ -1,40 +1,42 @@
 # DITS Specification
 
-**Version:** 1.0
+**Version:** 2.0
 **Status:** Implemented
 
 ---
 
 ## 1. Overview
 
-DITS (Distributed Issue Tracking System) is a hybrid, local-first issue tracking system that combines:
+DITS (Distributed Coordination Substrate) is a hybrid, local-first coordination system that combines:
 
-- Append-only, event-sourced issue history
+- Append-only, event-sourced work item history
 - Coordinated identity and schema (meta configuration)
 - Deterministic synchronization and reconciliation
-- Content-addressed attachment storage
+- Content-addressed artifact storage
 - Cryptographic event signatures
+- Agent-native coordination primitives (leases, attempts, checkpoints, findings)
 
 The system separates:
 
-- **Data Plane** (issue events) — distributed, mergeable
+- **Data Plane** (work item events) — distributed, mergeable
 - **Control Plane** (meta configuration) — coordinated, versioned
+- **Coordination Layer** (leases, attempts) — materialized from events
 - **Private Layer** (overlay) — non-replicated user state
-- **Blob Store** (attachments) — content-addressed, synced separately
+- **Blob Store** (artifacts) — content-addressed, synced separately
 
 ---
 
 ## 2. Identity Model
 
-### 2.1 Canonical Issue ID
+### 2.1 Work Item ID
 
-Globally unique, client-generated. Format: `iss_<ULID>`.
+Globally unique, client-generated. Format: `wrk_<ULID>`.
 
 Properties: immutable, never reused, primary reference key.
 
-### 2.2 Shared Issue ID
+### 2.2 Shared ID
 
-Server-assigned, human-friendly. Format: `<PROJECT_KEY>-<N>` (e.g., `PROJ-1423`).
+Server-assigned, human-friendly. Format: `<PROJECT_KEY>-<N>` (e.g., `PROJ-42`).
 
 Properties: monotonic, stable, may contain gaps, never reused.
 
@@ -50,11 +52,27 @@ Derived from Ed25519 public key. Format: `actor_<first 8 bytes of public key hex
 
 Identifies a DITS instance. Format: `node_<ULID>`.
 
-### 2.6 Attachment ID
+### 2.6 Artifact ID
 
-Client-generated. Format: `att_<ULID>`.
+Client-generated. Format: `art_<ULID>`.
 
-### 2.7 ULID Generation
+### 2.7 Lease ID
+
+Client-generated. Format: `lea_<ULID>`.
+
+### 2.8 Attempt ID
+
+Client-generated. Format: `atp_<ULID>`.
+
+### 2.9 Review ID
+
+Client-generated. Format: `rev_<ULID>`.
+
+### 2.10 Handoff ID
+
+Client-generated. Format: `hof_<ULID>`.
+
+### 2.11 ULID Generation
 
 All ULIDs use a monotonic entropy source to prevent collisions at sub-millisecond creation rates. Entropy is reset if exhausted.
 
@@ -69,38 +87,96 @@ All state changes are recorded as immutable events.
 ```json
 {
   "id": "evt_01...",
-  "issue_id": "iss_01...",
-  "type": "issue.status_set",
+  "work_item_id": "wrk_01...",
+  "type": "work.status_set",
   "parent_event_ids": ["evt_00..."],
   "meta_version": 3,
   "actor_id": "actor_abc...",
   "timestamp": "2026-03-29T10:00:00Z",
   "payload": {"from": "open", "to": "in_progress"},
+  "emitted_by": {"actor_id": "actor_abc...", "agent_id": "deploy-bot"},
   "signature": "<base64>"
 }
 ```
 
 ### 3.2 Event Types
 
+#### Lifecycle Events
+
 | Type | Payload | Description |
 |------|---------|-------------|
-| `issue.created` | `{title, body?, type_slug?}` | Creates a new issue |
-| `issue.title_set` | `{title}` | Updates issue title |
-| `issue.body_set` | `{body}` | Updates issue body |
-| `issue.status_set` | `{from, to}` | Changes issue status |
-| `issue.label_added` | `{label_slug}` | Adds a label |
-| `issue.label_removed` | `{label_slug}` | Removes a label |
-| `issue.assigned` | `{assignee}` | Assigns an actor |
-| `issue.unassigned` | `{assignee}` | Unassigns an actor |
-| `issue.commented` | `{body}` | Adds a comment |
-| `issue.priority_set` | `{priority}` | Changes priority |
-| `issue.closed` | `{}` | Closes the issue |
-| `issue.reopened` | `{}` | Reopens the issue |
-| `issue.shared_id_assigned` | `{shared_id}` | Server assigns shared ID |
-| `issue.attachment_added` | `{attachment_id, content_hash, filename, mime_type, size_bytes}` | Attaches a file |
-| `issue.attachment_removed` | `{attachment_id}` | Removes an attachment |
-| `issue.linked` | `{relation_type, target_issue}` | Links to another issue |
-| `issue.unlinked` | `{relation_type, target_issue}` | Removes a link |
+| `work.created` | `{title, body?, kind, schema_ref?}` | Creates a new work item |
+| `work.title_set` | `{title}` | Updates title |
+| `work.body_set` | `{body}` | Updates body |
+| `work.status_set` | `{from, to}` | Changes status |
+| `work.priority_set` | `{priority}` | Changes priority |
+| `work.label_added` | `{label_slug}` | Adds a label |
+| `work.label_removed` | `{label_slug}` | Removes a label |
+| `work.assigned` | `{assignee}` | Assigns an actor |
+| `work.unassigned` | `{assignee}` | Unassigns an actor |
+| `work.commented` | `{body, produced_by?}` | Adds a comment |
+| `work.closed` | `{reason?}` | Closes the work item |
+| `work.reopened` | `{}` | Reopens the work item |
+| `work.shared_id_assigned` | `{shared_id}` | Server assigns shared ID |
+
+#### Execution / Ownership Events
+
+| Type | Payload |
+|------|---------|
+| `work.leased` | `{lease_id, lease_duration_secs, lease_expires_at, generation}` |
+| `work.lease_released` | `{lease_id, reason}` |
+| `work.lease_renewed` | `{lease_id, lease_expires_at, generation}` |
+| `work.execution_started` | `{attempt_id, attempt_number, plan_ref?}` |
+| `work.execution_completed` | `{attempt_id, summary, output_artifact_refs?}` |
+| `work.execution_failed` | `{attempt_id, error, retryable, output_artifact_refs?}` |
+| `work.execution_abandoned` | `{attempt_id, reason}` |
+
+#### Checkpoint / Progress Events
+
+| Type | Payload |
+|------|---------|
+| `work.checkpointed` | `{attempt_id, summary, progress, next_step?, data?}` |
+| `work.progress_reported` | `{attempt_id, progress, message}` |
+| `work.blocked` | `{reason, blocked_by_ref?}` |
+| `work.unblocked` | `{reason}` |
+
+#### Evidence / Observation Events
+
+| Type | Payload |
+|------|---------|
+| `work.observation_recorded` | `{summary, data?, produced_by?}` |
+| `work.evidence_attached` | `{artifact_id, content_hash, filename, mime_type, size_bytes, artifact_type, semantic_role, produced_by?}` |
+| `work.finding_recorded` | `{statement, confidence, source?, evidence_refs?, produced_by?}` |
+| `work.finding_retracted` | `{original_event_id, reason}` |
+
+#### Planning / Decision Events
+
+| Type | Payload |
+|------|---------|
+| `work.plan_proposed` | `{plan, summary, produced_by?}` |
+| `work.plan_accepted` | `{plan_event_id, comment?}` |
+| `work.plan_rejected` | `{plan_event_id, reason}` |
+| `work.step_added` | `{step_index, description, depends_on?}` |
+| `work.decision_recorded` | `{decision, rationale, alternatives?, produced_by?}` |
+
+#### Handoff / Review Events
+
+| Type | Payload |
+|------|---------|
+| `work.review_requested` | `{review_id, reviewer?, scope, artifact_refs?}` |
+| `work.review_completed` | `{review_id, verdict, comment?, produced_by?}` |
+| `work.handed_off` | `{handoff_id, from, to, context, artifact_refs?}` |
+| `work.handoff_accepted` | `{handoff_id, comment?}` |
+| `work.handoff_rejected` | `{handoff_id, reason}` |
+
+#### Relation / Artifact Events
+
+| Type | Payload |
+|------|---------|
+| `work.linked` | `{relation_type, target_work_item}` |
+| `work.unlinked` | `{relation_type, target_work_item}` |
+| `work.artifact_added` | `{artifact_id, content_hash, filename, mime_type, size_bytes, artifact_type?, semantic_role?, produced_by?}` |
+| `work.artifact_removed` | `{artifact_id}` |
 
 ### 3.3 Event Rules
 
@@ -108,9 +184,9 @@ All state changes are recorded as immutable events.
 - Events are **append-only** — new events are always added, never replace existing ones.
 - Event IDs are **globally unique** — ULID with monotonic entropy prevents collisions.
 - Events MUST reference their parent events via `parent_event_ids`.
-- The first event for an issue (`issue.created`) has an empty parent list.
+- The first event for a work item (`work.created`) has an empty parent list.
 - Events MUST carry the `meta_version` of the meta config at creation time.
-- Labels and statuses referenced in payloads MUST exist at the event's `meta_version`.
+- Labels, statuses, and kinds referenced in payloads MUST exist at the event's `meta_version`.
 
 ---
 
@@ -122,7 +198,7 @@ Events form a directed acyclic graph (DAG) through `parent_event_ids`. Each even
 
 ### 4.2 Heads
 
-Heads are events that are not a parent of any other event. They represent the current tips of the DAG for an issue.
+Heads are events that are not a parent of any other event. They represent the current tips of the DAG for a work item.
 
 ### 4.3 Causal Ordering
 
@@ -142,66 +218,127 @@ All clients that have the same set of events will compute the same order and thu
 
 | Field Type | Resolution |
 |------------|------------|
-| Scalar (title, status, priority) | Last writer wins in causal order |
+| Scalar (title, status, priority, kind) | Last writer wins in causal order |
 | Set (labels, assignees) | Add/remove operations merge |
-| Append-only (comments) | All preserved in order |
-| By-ID (attachments, relations) | Add/remove by unique ID |
+| Append-only (comments, checkpoints, observations, findings) | All preserved in order |
+| By-ID (artifacts, relations, attempts) | Add/remove by unique ID |
+| Flag (blocked) | Latest event wins |
+| Coordination (lease_holder, current_attempt) | Latest event wins |
 
 ---
 
-## 5. Meta Configuration
+## 5. Provenance
 
-### 5.1 Structure
+### 5.1 EmittedBy (Event-Level)
+
+Who/what created and emitted the event. Attached to the Event struct.
+
+```json
+{"actor_id": "actor_abc...", "agent_id": "deploy-bot", "version": "1.2.0"}
+```
+
+### 5.2 ProducedBy (Content-Level)
+
+Who/what produced the referenced content. Attached to payloads (artifacts, comments, findings, observations, decisions, plans).
+
+```json
+{
+  "actor_id": "actor_abc...",
+  "model": "claude-3.5-sonnet",
+  "tool": "code-search",
+  "prompt_ref": "sha256:...",
+  "source_artifact_refs": ["sha256:..."]
+}
+```
+
+These are often the same actor, but not always. An orchestration agent may emit an event for an artifact produced by a different tool.
+
+---
+
+## 6. Coordination Semantics
+
+### 6.1 Lease Model
+
+- One active lease per work item at a time
+- Leasing with an active non-expired lease fails
+- Leases have expiration time and generation counter
+- Can be renewed (extends expiration) or released (explicit relinquish)
+- Generation is monotonically increasing per work item
+
+### 6.2 Execution Attempts
+
+- Multiple attempts per work item, numbered sequentially (1, 2, 3...)
+- Each attempt has a unique AttemptID and number
+- Checkpoints recorded against current attempt
+- Attempt ends with: `execution_completed`, `execution_failed`, or `execution_abandoned`
+
+### 6.3 Blocked / Unblocked
+
+Simple flag — latest event wins. `work.blocked` sets blocked with reason, `work.unblocked` clears it.
+
+### 6.4 Status Independence
+
+Operational state (lease, attempt, blocked) is independent of workflow status. A work item can be `status=in_progress`, `leased=true`, `attempts=3`, `blocked=true` simultaneously.
+
+---
+
+## 7. Meta Configuration
+
+### 7.1 Structure
 
 ```json
 {
   "version": 3,
   "project_key": "PROJ",
+  "work_kinds": [{"slug": "task", "name": "Task", "workflow_slug": "default"}],
+  "workflows": [{"slug": "default", "statuses": [...], "transitions": [...]}],
+  "priorities": ["low", "medium", "high", "critical"],
   "labels": [{"slug": "bug", "name": "Bug", "color": "#ff0000"}],
-  "workflows": [{
-    "slug": "default",
-    "name": "Default",
-    "statuses": [
-      {"slug": "open", "name": "Open", "category": "open"},
-      {"slug": "in_progress", "name": "In Progress", "category": "in_progress"},
-      {"slug": "closed", "name": "Closed", "category": "done"}
-    ],
-    "transitions": [{"from": "*", "to": "open"}, {"from": "*", "to": "in_progress"}, {"from": "*", "to": "closed"}]
-  }],
-  "issue_types": [{"slug": "task", "name": "Task", "workflow_slug": "default"}],
-  "priorities": ["low", "medium", "high", "critical"]
+  "artifact_types": [{"slug": "log", "name": "Log"}],
+  "evidence_types": [{"slug": "observation", "name": "Observation"}],
+  "relation_types": [{"slug": "blocks", "name": "Blocks", "inverse": "blocked_by"}],
+  "lease_policies": [{"work_kind_slug": "execution", "default_duration_sec": 300, "max_duration_sec": 3600, "max_renewals": 10}],
+  "review_policies": []
 }
 ```
 
-### 5.2 Versioning Rules
+### 7.2 Default Workflows
+
+Three workflows ship by default:
+
+- **default** — open, in_progress, closed
+- **execution** — pending, active, completed, failed
+- **review** — pending_review, in_review, approved, changes_requested, rejected
+
+### 7.3 Versioning Rules
 
 - Meta version is monotonically increasing.
 - Every mutation increments the version.
-- Local updates use optimistic concurrency: `SaveMetaIfVersion` checks that `current_version == expected_version`.
+- Local updates use optimistic concurrency: `SaveMetaIfVersion` checks current_version == expected_version.
 - Sync resolves by highest version wins.
 
-### 5.3 Validation
+### 7.4 Validation
 
 Events are validated against meta at creation time:
 
-- `issue.created`: `type_slug` must exist in `issue_types`
-- `issue.status_set`: `to` status must exist in a workflow
-- `issue.label_added`: `label_slug` must exist in `labels`
-- `issue.priority_set`: `priority` must exist in `priorities`
-
-Historical events remain valid against the meta version they were created with.
+- `work.created`: `kind` must exist in `work_kinds`
+- `work.status_set`: `to` status must exist in a workflow
+- `work.label_added`: `label_slug` must exist in `labels`
+- `work.priority_set`: `priority` must exist in `priorities`
+- `work.artifact_added` / `work.evidence_attached`: `artifact_type` must exist (if non-empty)
+- `work.linked` / `work.unlinked`: `relation_type` must exist in `relation_types`
 
 ---
 
-## 6. Synchronization Protocol
+## 8. Synchronization Protocol
 
-### 6.1 Endpoint
+### 8.1 Endpoint
 
 ```
 POST /api/v1/sync
 ```
 
-### 6.2 Request
+### 8.2 Request
 
 ```json
 {
@@ -216,151 +353,109 @@ POST /api/v1/sync
 }
 ```
 
-### 6.3 Response
+### 8.3 Response
 
 ```json
 {
   "events": [],
-  "shared_ids": {"iss_01...": "PROJ-42"},
+  "shared_ids": {"wrk_01...": "PROJ-42"},
   "heads": ["evt_03...", "evt_04..."],
   "meta": null
 }
 ```
 
-### 6.4 Algorithm
+### 8.4 Algorithm
 
 **Server (HandleSync):**
 1. Register actor (store public key)
 2. Verify signatures (warn mode)
 3. Ingest client events (`INSERT OR IGNORE`)
 4. Accept client meta if version > server version
-5. Rematerialize affected issues
-6. Allocate shared IDs to new issues
+5. Rematerialize affected work items
+6. Allocate shared IDs to new work items
 7. Compute events client is missing (BFS from server heads, stop at client heads)
-8. Include shared IDs for pulled issues
+8. Include shared IDs for pulled work items
 9. Store client heads as remote state
 10. Return response with meta if server version > client version
 
 **Client (ApplySync):**
 1. Ingest server events
-2. Rematerialize affected issues
+2. Rematerialize affected work items
 3. Apply shared IDs
 4. Update meta if server version > local version
 5. Store server heads
 
-### 6.5 Missing Event Detection
-
-BFS backward from sender's heads through `parent_event_ids`, stopping at receiver's known heads. All visited events (minus the stop set) are what needs to be transferred.
-
-### 6.6 Idempotency
+### 8.5 Idempotency
 
 Events use `INSERT OR IGNORE` on primary key (event ID). Duplicate events from retries are silently dropped. Sync is safe to retry.
 
 ---
 
-## 7. Attachments
+## 9. Artifacts
 
-### 7.1 Principles
+### 9.1 Principles
 
-- Attachment **metadata** is recorded as issue events.
-- Attachment **bytes** are stored in a separate content-addressed blob store.
-- Shared sync verifies blob presence separately from event ingestion.
-- Removing an attachment removes the reference, not the blob.
+- Artifact **metadata** is recorded as work item events.
+- Artifact **bytes** are stored in a separate content-addressed blob store.
+- Artifacts have types (`log`, `patch`, `screenshot`, `report`, etc.) and semantic roles (`evidence`, `proposal`, `final_output`, etc.).
+- Artifacts carry optional `produced_by` provenance.
+- Removing an artifact removes the reference, not the blob.
 
-### 7.2 Content Addressing
+### 9.2 Content Addressing
 
 Blobs are keyed by `sha256:<hex>`. Storage path: `<root>/<first2>/<next2>/<full_hash>`.
 
 Properties: deduplication, integrity verification, atomic writes (temp file + rename).
 
-### 7.3 Size Limit
+### 9.3 Size Limit
 
 Maximum blob size: 50MB. Enforced at upload time.
 
-### 7.4 Blob Sync
+### 9.4 Blob Sync
 
 After event sync:
 1. Check which pushed hashes the server is missing (`POST /api/v1/blobs/check`)
 2. Upload missing blobs (`PUT /api/v1/blobs/{hash}`)
 3. Download blobs from pulled events (`GET /api/v1/blobs/{hash}`)
 
-### 7.5 Blob API
-
-| Method | Path | Description |
-|--------|------|-------------|
-| POST | `/api/v1/blobs/check` | Check hash presence |
-| PUT | `/api/v1/blobs/{hash}` | Upload blob (verified) |
-| GET | `/api/v1/blobs/{hash}` | Download blob |
-
 ---
 
-## 8. Signatures
+## 10. Signatures
 
-### 8.1 Algorithm
+### 10.1 Algorithm
 
 Ed25519. Keypair generated on `dits init`.
 
-### 8.2 Canonical JSON
+### 10.2 Canonical JSON
 
-Signature covers canonical JSON of the event: all fields except `signature`, sorted keys, no extra whitespace. Timestamp formatted as `2006-01-02T15:04:05.999999999Z`.
+Signature covers canonical JSON of the event: all fields except `signature`, sorted keys, no extra whitespace. Includes `emitted_by` if present. Timestamp formatted as `2006-01-02T15:04:05.999999999Z`.
 
-### 8.3 Verification
+### 10.3 Verification
 
 Server verifies in **warn mode**: invalid signatures are logged but events are not rejected.
 
-### 8.4 Actor Registry
+### 10.4 Actor Registry
 
 Clients send `actor_id` and `public_key` in sync requests. Server stores in `actors` table.
 
 ---
 
-## 9. Private Overlay
+## 11. Private Overlay
 
-### 9.1 Principle
+### 11.1 Principle
 
 Overlay data is local-only and never synced.
 
-### 9.2 Types
+### 11.2 Types
 
 | Type | Storage | Description |
 |------|---------|-------------|
-| Annotations | Key-value pairs per issue | Personal notes, custom metadata |
-| Private labels | String set per issue | Personal categorization |
+| Annotations | Key-value pairs per work item | Personal notes, custom metadata |
+| Private labels | String set per work item | Personal categorization |
 
-### 9.3 Isolation
+### 11.3 Isolation
 
 Each client maintains its own overlay. Syncing does not transfer overlay data.
-
----
-
-## 10. Shared ID Allocation
-
-### 10.1 Mechanism
-
-Server maintains a per-project counter. On sync, new issues without shared IDs get the next available number.
-
-### 10.2 Properties
-
-- Monotonic (always increasing)
-- May have gaps (due to concurrent allocation)
-- Never reused
-- Format: `<PROJECT_KEY>-<N>`
-
----
-
-## 11. Server Role
-
-The server is responsible for:
-- Shared ID allocation
-- Meta validation (highest version wins)
-- Signature verification (warn mode)
-- Blob storage
-- Event relay between clients
-
-The server is NOT:
-- The sole source of truth (clients have full event history)
-- The owner of issue state (state is derived from events)
-- Required for local operations (create, edit, list all work offline)
 
 ---
 
@@ -376,16 +471,17 @@ SQLite database (configurable path). Blob store (configurable directory).
 
 ### 12.3 Schema
 
-Six incremental migrations:
+Seven incremental migrations:
 
 | # | Tables |
 |---|--------|
-| 001 | events, event_parents, dag_heads, issues, issue_labels, issue_assignees, issue_comments, shared_id_counter, meta_config |
+| 001 | events, event_parents, dag_heads, work_items, work_item_labels, work_item_assignees, work_item_comments, shared_id_counter, meta_config |
 | 002 | sync_remotes, sync_remote_heads |
-| 003 | issue_attachments |
+| 003 | work_item_artifacts |
 | 004 | actors |
 | 005 | overlay_annotations, overlay_labels |
-| 006 | issue_relations |
+| 006 | work_item_relations |
+| 007 | work_item_checkpoints, work_item_observations, work_item_findings, work_item_attempts |
 
 ---
 
@@ -399,4 +495,7 @@ Six incremental migrations:
 6. **Authority is minimal** — server coordinates IDs and meta, clients own their history
 7. **Blobs are separate** — metadata in events, bytes in content-addressed store
 8. **Signatures are pervasive** — every event is signed at creation
-9. **Privacy is explicit** — overlay data stays local, sensitive work uses separate repos
+9. **Privacy is explicit** — overlay data stays local
+10. **Operational state is independent** — lease, attempt, and blocked state do not imply workflow status
+11. **Provenance is two-layered** — EmittedBy (event producer) is distinct from ProducedBy (content producer)
+12. **Coordination is event-sourced** — leases, attempts, and findings are derived from events, not stored separately

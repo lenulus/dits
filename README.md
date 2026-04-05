@@ -1,18 +1,19 @@
-# DITS — Distributed Issue Tracking System
+# DITS — Distributed Coordination Substrate
 
-DITS is a local-first, event-sourced distributed issue tracker. It combines append-only history, coordinated identity, schema evolution, and causal correctness into a system that works offline and syncs through a lightweight server.
+DITS is a local-first, event-sourced distributed coordination system for humans and agents. Work items replace issues as the primary object. The event vocabulary covers lifecycle, execution, evidence, planning, and handoffs. Agents coordinate by leasing work, checkpointing progress, recording findings, and handing off between actors.
 
 ## Key Features
 
-- **Local-first** — create and edit issues offline, sync when ready
+- **Work items, not tickets** — durable coordination objects with a `kind` (task, issue, investigation, execution, plan, decision, handoff, artifact_review)
+- **Agent-native coordination** — first-class events for leasing work, checkpointing, recording evidence, proposing plans, and handing off
+- **Local-first** — create and edit offline, sync when ready
 - **Event-sourced** — every change is an immutable event in a DAG
 - **Deterministic conflict resolution** — concurrent edits converge automatically
-- **Human-friendly IDs** — `PROJ-123` shared IDs alongside stable canonical IDs
-- **Structured metadata** — versioned labels, workflows, issue types with validation
-- **Content-addressed attachments** — files stored separately from event history, deduped by SHA256
+- **Structured provenance** — two-layer model: EmittedBy (who created the event) and ProducedBy (who produced the content)
+- **Artifacts over attachments** — files have types, semantic roles, and producer metadata
+- **Human-friendly IDs** — `PROJ-123` shared IDs alongside stable `wrk_<ULID>` canonical IDs
 - **Ed25519 signatures** — every event cryptographically signed
-- **Private overlay** — local annotations and labels that never sync
-- **JSON output** — `--json` flag for scripting and integrations
+- **Machine query surfaces** — `ready=true` answers "what should I do next?"
 
 ## Quick Start
 
@@ -23,18 +24,23 @@ make build
 # Initialize a project
 dits init --project MYPROJ
 
-# Create issues
-dits issue create --title "Fix login bug" --body "Fails on Safari"
-dits issue create --title "Add dark mode" --label feature
+# Create work items
+dits work create --title "Deploy service" --kind execution
+dits work create --title "Fix login bug" --kind issue
 
 # List and show
-dits issue list
-dits issue show MYPROJ-1
+dits work list
+dits work show MYPROJ-1
 
-# Comment, close, reopen
-dits issue comment MYPROJ-1 --body "Reproduced on Chrome"
-dits issue close MYPROJ-1
-dits issue reopen MYPROJ-1
+# Coordination: lease, execute, checkpoint, complete
+dits work lease MYPROJ-1
+dits work start MYPROJ-1
+dits work checkpoint MYPROJ-1 --summary "Step 1 done" --progress 0.5
+dits work complete MYPROJ-1
+
+# Evidence and findings
+dits work observe MYPROJ-2 --summary "CPU spike at 10:00"
+dits work finding MYPROJ-2 --statement "Memory leak in service X" --confidence 0.8
 
 # Sync with a server
 dits-server --project MYPROJ --addr :8484 &
@@ -44,15 +50,16 @@ dits sync
 
 ## Architecture
 
-DITS has three layers:
+DITS has four layers:
 
 | Layer | Purpose | Synced? |
 |-------|---------|---------|
-| **Data Plane** | Append-only event DAG (issue history) | Yes |
-| **Control Plane** | Versioned meta config (labels, workflows) | Yes |
+| **Data Plane** | Append-only event DAG (work item history) | Yes |
+| **Control Plane** | Versioned meta config (kinds, workflows, policies) | Yes |
+| **Coordination** | Leases, attempts, checkpoints (materialized from events) | Yes |
 | **Private Layer** | Local annotations and private labels | No |
 
-Events form a DAG via parent references. Issues are materialized by reducing events in causal order (Kahn's algorithm). Conflicts resolve deterministically: causal order > timestamp > lexical event ID.
+Events form a DAG via parent references. Work items are materialized by reducing events in causal order (Kahn's algorithm). Conflicts resolve deterministically: causal order > timestamp > lexical event ID.
 
 See [docs/architecture.md](docs/architecture.md) for full details.
 
@@ -74,10 +81,10 @@ internal/
   domain/            Core types, events, DAG, reducer, validation
   store/sqlite/      SQLite storage with migrations
   sync/              Sync protocol and engine
-  server/            HTTP server (chi)
+  server/            HTTP server (chi) with v2 query API
   blob/              Content-addressed blob store
   crypto/            Ed25519 signing and verification
-  cli/               Cobra CLI commands
+  cli/               Cobra CLI commands (work + issue)
   project/           .dits/ directory management
 ```
 
