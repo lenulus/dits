@@ -225,6 +225,9 @@ var workShowCmd = &cobra.Command{
 		if wi.CurrentAttempt != nil {
 			fmt.Printf("Attempt:   %s\n", *wi.CurrentAttempt)
 		}
+		if wi.RetainedOutcomeRef != nil {
+			fmt.Printf("Retained:  %s\n", *wi.RetainedOutcomeRef)
+		}
 
 		if len(wi.Labels) > 0 {
 			fmt.Printf("Labels:    %s\n", strings.Join(wi.Labels, ", "))
@@ -290,6 +293,20 @@ var workShowCmd = &cobra.Command{
 					retracted = " [RETRACTED]"
 				}
 				fmt.Printf("  [%.0f%%] %s%s\n", f.Confidence*100, f.Statement, retracted)
+			}
+		}
+
+		if len(wi.Outcomes) > 0 || wi.RetainedOutcomeRef != nil {
+			fmt.Printf("\n--- Outcomes ---\n")
+			if wi.RetainedOutcomeRef != nil {
+				fmt.Printf("  Retained: %s\n", *wi.RetainedOutcomeRef)
+			}
+			for _, oc := range wi.Outcomes {
+				evalInfo := ""
+				if oc.EvalRef != "" {
+					evalInfo = fmt.Sprintf(" (eval: %s)", oc.EvalRef)
+				}
+				fmt.Printf("  [%s] %s %s %s%s\n", oc.Decision, oc.SubjectKind, oc.SubjectRef, oc.Reason, evalInfo)
 			}
 		}
 

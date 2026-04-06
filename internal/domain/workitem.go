@@ -39,11 +39,12 @@ type WorkItem struct {
 	Assignees []ActorID
 
 	// Coordination state
-	LeaseHolder    *ActorID
-	LeaseExpiresAt *time.Time
-	CurrentAttempt *AttemptID
-	Blocked        bool
-	BlockedReason  string
+	LeaseHolder        *ActorID
+	LeaseExpiresAt     *time.Time
+	CurrentAttempt     *AttemptID
+	Blocked            bool
+	BlockedReason      string
+	RetainedOutcomeRef *string // subject ref of the currently retained output
 
 	// Timestamps
 	CreatedBy ActorID
@@ -60,6 +61,7 @@ type WorkItem struct {
 	Findings     []Finding
 	Attempts     []ExecutionAttempt
 	Evals        []Eval
+	Outcomes     []Outcome
 
 	EventCount int
 	HeadEvents []EventID
@@ -151,5 +153,17 @@ type Eval struct {
 	Metrics     json.RawMessage
 	Verdict     string // pass, fail, partial, etc.
 	ProducedBy  *ProducedBy
+	Timestamp   time.Time
+}
+
+// Outcome records a selection decision — which output was retained or discarded.
+type Outcome struct {
+	EventID     EventID
+	SubjectKind string // attempt, artifact
+	SubjectRef  string // attempt ID, artifact ID, or content hash
+	Decision    string // "retained" or "discarded"
+	Reason      string
+	EvalRef     string // optional — eval that informed this decision
+	ActorID     ActorID
 	Timestamp   time.Time
 }

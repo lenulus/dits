@@ -53,6 +53,7 @@ func New(db store.DB, blobs blob.Store, logger *slog.Logger) *Server {
 		r.Get("/work/{id}/attempts", s.handleWorkItemAttempts)
 		r.Get("/work/{id}/checkpoints", s.handleWorkItemCheckpoints)
 		r.Get("/work/{id}/evals", s.handleWorkItemEvals)
+		r.Get("/work/{id}/outcomes", s.handleWorkItemOutcomes)
 		r.Get("/events", s.handleListEvents)
 		r.Get("/meta", s.handleGetMeta)
 	})
@@ -394,6 +395,27 @@ func (s *Server) handleWorkItemEvals(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{"evals": evals, "count": len(evals)})
+}
+
+func (s *Server) handleWorkItemOutcomes(w http.ResponseWriter, r *http.Request) {
+	wi := s.resolveWorkItem(w, r)
+	if wi == nil {
+		return
+	}
+
+	outcomes := wi.Outcomes
+	if v := r.URL.Query().Get("decision"); v != "" {
+		var filtered []domain.Outcome
+		for _, oc := range outcomes {
+			if oc.Decision == v {
+				filtered = append(filtered, oc)
+			}
+		}
+		outcomes = filtered
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"outcomes": outcomes, "count": len(outcomes)})
 }
 
 func (s *Server) handleListEvents(w http.ResponseWriter, r *http.Request) {

@@ -267,7 +267,26 @@ type Eval struct {
 }
 ```
 
-### 5.11 Relation Types
+### 5.11 Outcome (Selection Decision)
+
+An outcome records which output was accepted (retained) or rejected (discarded) in an optimization loop. Supports the propose-execute-eval-retain cycle.
+
+```go
+type Outcome struct {
+    EventID     EventID
+    SubjectKind string  // attempt, artifact
+    SubjectRef  string  // attempt ID, artifact ID, or content hash
+    Decision    string  // "retained" or "discarded"
+    Reason      string
+    EvalRef     string  // optional — eval that informed this decision
+    ActorID     ActorID
+    Timestamp   time.Time
+}
+```
+
+The WorkItem tracks `RetainedOutcomeRef *string` — the subject ref of the currently retained output. This is set by `work.outcome_retained` and cleared if the same ref is later discarded.
+
+### 5.12 Relation Types
 
 Formalized core set, extensible via meta:
 
@@ -383,7 +402,16 @@ type Event struct {
 | `work.eval_requested` | `{eval_id, subject_kind?, subject_ref, rubric_ref?, scope}` |
 | `work.eval_completed` | `{eval_id, subject_kind?, subject_ref, rubric_ref?, summary?, metrics?, verdict, produced_by?}` |
 
-### 6.8 Relation / Artifact Events
+### 6.8 Outcome Events
+
+| Event | Payload |
+|-------|---------|
+| `work.outcome_retained` | `{subject_kind, subject_ref, reason?, eval_ref?}` |
+| `work.outcome_discarded` | `{subject_kind, subject_ref, reason?}` |
+
+Outcome events record selection decisions in optimization loops. After executing and evaluating multiple approaches, the retained outcome marks the accepted/winning output. Discarded outcomes are superseded. If the discarded subject matches the currently retained ref, the retained ref is cleared.
+
+### 6.9 Relation / Artifact Events
 
 | Event | Payload |
 |-------|---------|

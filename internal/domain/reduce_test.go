@@ -923,3 +923,106 @@ func TestReduce_LeaseReleasedAllAttemptsAuthoritative(t *testing.T) {
 	require.Len(t, wi.Attempts, 1)
 	assert.True(t, wi.Attempts[0].Authoritative, "no active lease = all authoritative")
 }
+
+func TestReduce_OutcomeRetained(t *testing.T) {
+	t0 := time.Date(2026, 3, 29, 10, 0, 0, 0, time.UTC)
+	events := []Event{
+		{
+			ID: "evt_001", WorkItemID: "wrk_001", Type: EventWorkCreated,
+			ActorID: "actor_alice", Timestamp: t0,
+			Payload: MustMarshalPayload(WorkCreatedPayload{Title: "Optimize", Kind: "execution"}),
+		},
+		{
+			ID: "evt_002", WorkItemID: "wrk_001", Type: EventWorkOutcomeRetained,
+			ParentEventIDs: []EventID{"evt_001"},
+			ActorID: "actor_agent", Timestamp: t0.Add(1 * time.Minute),
+			Payload: MustMarshalPayload(OutcomeRetainedPayload{
+				SubjectKind: "attempt", SubjectRef: "atp_001",
+				Reason: "Passed all evals", EvalRef: "evl_001",
+			}),
+		},
+	}
+
+	wi, err := Reduce(events)
+	require.NoError(t, err)
+
+	require.Len(t, wi.Outcomes, 1)
+	assert.Equal(t, "retained", wi.Outcomes[0].Decision)
+	assert.Equal(t, "attempt", wi.Outcomes[0].SubjectKind)
+	assert.Equal(t, "atp_001", wi.Outcomes[0].SubjectRef)
+	assert.Equal(t, "evl_001", wi.Outcomes[0].EvalRef)
+	require.NotNil(t, wi.RetainedOutcomeRef)
+	assert.Equal(t, "atp_001", *wi.RetainedOutcomeRef)
+}
+
+func TestReduce_OutcomeDiscardedClearsRetained(t *testing.T) {
+	t0 := time.Date(2026, 3, 29, 10, 0, 0, 0, time.UTC)
+	events := []Event{
+		{
+			ID: "evt_001", WorkItemID: "wrk_001", Type: EventWorkCreated,
+			ActorID: "actor_alice", Timestamp: t0,
+			Payload: MustMarshalPayload(WorkCreatedPayload{Title: "Test", Kind: "execution"}),
+		},
+		{
+			ID: "evt_002", WorkItemID: "wrk_001", Type: EventWorkOutcomeRetained,
+			ParentEventIDs: []EventID{"evt_001"},
+			ActorID: "actor_agent", Timestamp: t0.Add(1 * time.Minute),
+			Payload: MustMarshalPayload(OutcomeRetainedPayload{
+				SubjectKind: "artifact", SubjectRef: "sha256:abc",
+			}),
+		},
+		{
+			ID: "evt_003", WorkItemID: "wrk_001", Type: EventWorkOutcomeDiscarded,
+			ParentEventIDs: []EventID{"evt_002"},
+			ActorID: "actor_agent", Timestamp: t0.Add(2 * time.Minute),
+			Payload: MustMarshalPayload(OutcomeDiscardedPayload{
+				SubjectKind: "artifact", SubjectRef: "sha256:abc",
+				Reason: "Better version available",
+			}),
+		},
+	}
+
+	wi, err := Reduce(events)
+	require.NoError(t, err)
+
+	require.Len(t, wi.Outcomes, 2)
+	assert.Equal(t, "retained", wi.Outcomes[0].Decision)
+	assert.Equal(t, "discarded", wi.Outcomes[1].Decision)
+	assert.Nil(t, wi.RetainedOutcomeRef, "discarding retained ref should clear it")
+}
+
+func TestReduce_OutcomeDiscardDifferentRef(t *testing.T) {
+	t0 := time.Date(2026, 3, 29, 10, 0, 0, 0, time.UTC)
+	events := []Event{
+		{
+			ID: "evt_001", WorkItemID: "wrk_001", Type: EventWorkCreated,
+			ActorID: "actor_alice", Timestamp: t0,
+			Payload: MustMarshalPayload(WorkCreatedPayload{Title: "Test", Kind: "execution"}),
+		},
+		{
+			ID: "evt_002", WorkItemID: "wrk_001", Type: EventWorkOutcomeRetained,
+			ParentEventIDs: []EventID{"evt_001"},
+			ActorID: "actor_agent", Timestamp: t0.Add(1 * time.Minute),
+			Payload: MustMarshalPayload(OutcomeRetainedPayload{
+				SubjectKind: "attempt", SubjectRef: "atp_002",
+			}),
+		},
+		{
+			ID: "evt_003", WorkItemID: "wrk_001", Type: EventWorkOutcomeDiscarded,
+			ParentEventIDs: []EventID{"evt_002"},
+			ActorID: "actor_agent", Timestamp: t0.Add(2 * time.Minute),
+			Payload: MustMarshalPayload(OutcomeDiscardedPayload{
+				SubjectKind: "attempt", SubjectRef: "atp_001",
+				Reason: "Failed eval",
+			}),
+		},
+	}
+
+	wi, err := Reduce(events)
+	require.NoError(t, err)
+
+	require.Len(t, wi.Outcomes, 2)
+	// Discarding atp_001 should NOT clear RetainedOutcomeRef (which is atp_002).
+	require.NotNil(t, wi.RetainedOutcomeRef)
+	assert.Equal(t, "atp_002", *wi.RetainedOutcomeRef)
+}

@@ -180,6 +180,13 @@ All state changes are recorded as immutable events.
 | `work.eval_requested` | `{eval_id, subject_kind?, subject_ref, rubric_ref?, scope}` |
 | `work.eval_completed` | `{eval_id, subject_kind?, subject_ref, rubric_ref?, summary?, metrics?, verdict, produced_by?}` |
 
+#### Outcome Events
+
+| Type | Payload |
+|------|---------|
+| `work.outcome_retained` | `{subject_kind, subject_ref, reason?, eval_ref?}` |
+| `work.outcome_discarded` | `{subject_kind, subject_ref, reason?}` |
+
 #### Relation / Artifact Events
 
 | Type | Payload |
@@ -504,6 +511,7 @@ Seven incremental migrations:
 | 006 | work_item_relations |
 | 007 | work_item_checkpoints, work_item_observations, work_item_findings, work_item_attempts |
 | 008 | work_item_evals |
+| 009 | work_item_outcomes |
 
 ---
 

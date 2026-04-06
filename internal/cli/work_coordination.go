@@ -2,7 +2,9 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/lenulus/pf/internal/domain"
@@ -529,6 +531,7 @@ var workEvalRequestCmd = &cobra.Command{
 		scope, _ := cmd.Flags().GetString("scope")
 		subjectRef, _ := cmd.Flags().GetString("subject")
 		subjectKind, _ := cmd.Flags().GetString("subject-kind")
+		rubricRef, _ := cmd.Flags().GetString("rubric-ref")
 
 		evalID := domain.NewEvalID()
 		heads, _ := proj.DB.GetHeads(ctx, wi.ID)
@@ -536,7 +539,8 @@ var workEvalRequestCmd = &cobra.Command{
 			ID: domain.NewEventID(), WorkItemID: wi.ID, Type: domain.EventWorkEvalRequested,
 			ParentEventIDs: heads, ActorID: proj.Config.ActorID, Timestamp: time.Now().UTC(),
 			Payload: domain.MustMarshalPayload(domain.EvalRequestedPayload{
-				EvalID: evalID, SubjectKind: subjectKind, SubjectRef: subjectRef, Scope: scope,
+				EvalID: evalID, SubjectKind: subjectKind, SubjectRef: subjectRef,
+				RubricRef: rubricRef, Scope: scope,
 			}),
 		}
 
@@ -568,8 +572,28 @@ var workEvalCompleteCmd = &cobra.Command{
 		evalID, _ := cmd.Flags().GetString("eval-id")
 		subjectRef, _ := cmd.Flags().GetString("subject")
 		subjectKind, _ := cmd.Flags().GetString("subject-kind")
+		rubricRef, _ := cmd.Flags().GetString("rubric-ref")
 		verdict, _ := cmd.Flags().GetString("verdict")
 		summary, _ := cmd.Flags().GetString("summary")
+		metricsRaw, _ := cmd.Flags().GetString("metrics")
+		metricsFile, _ := cmd.Flags().GetString("metrics-file")
+
+		var metricsJSON json.RawMessage
+		if metricsFile != "" {
+			data, err := os.ReadFile(metricsFile)
+			if err != nil {
+				return fmt.Errorf("reading metrics file: %w", err)
+			}
+			if !json.Valid(data) {
+				return fmt.Errorf("metrics file is not valid JSON")
+			}
+			metricsJSON = data
+		} else if metricsRaw != "" {
+			if !json.Valid([]byte(metricsRaw)) {
+				return fmt.Errorf("--metrics value is not valid JSON")
+			}
+			metricsJSON = json.RawMessage(metricsRaw)
+		}
 
 		heads, _ := proj.DB.GetHeads(ctx, wi.ID)
 		event := domain.Event{
@@ -579,8 +603,10 @@ var workEvalCompleteCmd = &cobra.Command{
 				EvalID:      domain.EvalID(evalID),
 				SubjectKind: subjectKind,
 				SubjectRef:  subjectRef,
+				RubricRef:   rubricRef,
 				Verdict:     verdict,
 				Summary:     summary,
+				Metrics:     metricsJSON,
 			}),
 		}
 
@@ -588,6 +614,84 @@ var workEvalCompleteCmd = &cobra.Command{
 			return err
 		}
 		fmt.Printf("Eval completed on %s: %s\n", workItemDisplayID(wi), verdict)
+		return nil
+	},
+}
+
+var workRetainCmd = &cobra.Command{
+	Use:   "retain <id>",
+	Short: "Mark an output as the retained/accepted result",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		proj, err := loadProject()
+		if err != nil {
+			return err
+		}
+		defer proj.DB.Close()
+
+		ctx := context.Background()
+		wi, err := resolveWorkItem(ctx, proj, args[0])
+		if err != nil {
+			return err
+		}
+
+		subjectRef, _ := cmd.Flags().GetString("subject")
+		subjectKind, _ := cmd.Flags().GetString("subject-kind")
+		reason, _ := cmd.Flags().GetString("reason")
+		evalRef, _ := cmd.Flags().GetString("eval-ref")
+
+		heads, _ := proj.DB.GetHeads(ctx, wi.ID)
+		event := domain.Event{
+			ID: domain.NewEventID(), WorkItemID: wi.ID, Type: domain.EventWorkOutcomeRetained,
+			ParentEventIDs: heads, ActorID: proj.Config.ActorID, Timestamp: time.Now().UTC(),
+			Payload: domain.MustMarshalPayload(domain.OutcomeRetainedPayload{
+				SubjectKind: subjectKind, SubjectRef: subjectRef,
+				Reason: reason, EvalRef: evalRef,
+			}),
+		}
+
+		if err := appendAndMaterialize(ctx, proj, wi.ID, event); err != nil {
+			return err
+		}
+		fmt.Printf("Retained %s %s on %s\n", subjectKind, subjectRef, workItemDisplayID(wi))
+		return nil
+	},
+}
+
+var workDiscardCmd = &cobra.Command{
+	Use:   "discard <id>",
+	Short: "Mark an output as discarded/superseded",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		proj, err := loadProject()
+		if err != nil {
+			return err
+		}
+		defer proj.DB.Close()
+
+		ctx := context.Background()
+		wi, err := resolveWorkItem(ctx, proj, args[0])
+		if err != nil {
+			return err
+		}
+
+		subjectRef, _ := cmd.Flags().GetString("subject")
+		subjectKind, _ := cmd.Flags().GetString("subject-kind")
+		reason, _ := cmd.Flags().GetString("reason")
+
+		heads, _ := proj.DB.GetHeads(ctx, wi.ID)
+		event := domain.Event{
+			ID: domain.NewEventID(), WorkItemID: wi.ID, Type: domain.EventWorkOutcomeDiscarded,
+			ParentEventIDs: heads, ActorID: proj.Config.ActorID, Timestamp: time.Now().UTC(),
+			Payload: domain.MustMarshalPayload(domain.OutcomeDiscardedPayload{
+				SubjectKind: subjectKind, SubjectRef: subjectRef, Reason: reason,
+			}),
+		}
+
+		if err := appendAndMaterialize(ctx, proj, wi.ID, event); err != nil {
+			return err
+		}
+		fmt.Printf("Discarded %s %s on %s\n", subjectKind, subjectRef, workItemDisplayID(wi))
 		return nil
 	},
 }
@@ -608,6 +712,8 @@ func init() {
 	workCmd.AddCommand(workReviewCmd)
 	workCmd.AddCommand(workEvalRequestCmd)
 	workCmd.AddCommand(workEvalCompleteCmd)
+	workCmd.AddCommand(workRetainCmd)
+	workCmd.AddCommand(workDiscardCmd)
 
 	workLeaseReleaseCmd.Flags().String("reason", "", "Release reason")
 
@@ -649,13 +755,30 @@ func init() {
 	workEvalRequestCmd.Flags().StringP("scope", "s", "", "Eval scope (required)")
 	workEvalRequestCmd.Flags().String("subject", "", "Subject reference (content hash, work item ID, etc.)")
 	workEvalRequestCmd.Flags().String("subject-kind", "", "Subject kind: work_item, artifact, attempt, finding, plan")
+	workEvalRequestCmd.Flags().String("rubric-ref", "", "Reference to rubric/policy for evaluation")
 	workEvalRequestCmd.MarkFlagRequired("scope")
 
 	workEvalCompleteCmd.Flags().String("eval-id", "", "Eval ID from eval-request (required)")
 	workEvalCompleteCmd.Flags().String("subject", "", "Subject reference")
 	workEvalCompleteCmd.Flags().String("subject-kind", "", "Subject kind: work_item, artifact, attempt, finding, plan")
+	workEvalCompleteCmd.Flags().String("rubric-ref", "", "Reference to rubric/policy used")
 	workEvalCompleteCmd.Flags().String("verdict", "", "Verdict: pass, fail, partial (required)")
 	workEvalCompleteCmd.Flags().String("summary", "", "Human-readable summary")
+	workEvalCompleteCmd.Flags().String("metrics", "", "Metrics as inline JSON string")
+	workEvalCompleteCmd.Flags().String("metrics-file", "", "Path to JSON file containing metrics")
 	workEvalCompleteCmd.MarkFlagRequired("eval-id")
 	workEvalCompleteCmd.MarkFlagRequired("verdict")
+
+	workRetainCmd.Flags().String("subject", "", "Subject reference (attempt ID, artifact ID, etc.) (required)")
+	workRetainCmd.Flags().String("subject-kind", "", "Subject kind: attempt, artifact (required)")
+	workRetainCmd.Flags().String("reason", "", "Why this output was retained")
+	workRetainCmd.Flags().String("eval-ref", "", "Eval ID that informed this decision")
+	workRetainCmd.MarkFlagRequired("subject")
+	workRetainCmd.MarkFlagRequired("subject-kind")
+
+	workDiscardCmd.Flags().String("subject", "", "Subject reference (required)")
+	workDiscardCmd.Flags().String("subject-kind", "", "Subject kind: attempt, artifact (required)")
+	workDiscardCmd.Flags().String("reason", "", "Why this output was discarded")
+	workDiscardCmd.MarkFlagRequired("subject")
+	workDiscardCmd.MarkFlagRequired("subject-kind")
 }

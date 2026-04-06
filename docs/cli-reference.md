@@ -230,18 +230,34 @@ Requests a review of the work item (human judgment).
 ### dits work eval-request
 
 ```
-dits work eval-request <id> --scope <text> [--subject <ref>]
+dits work eval-request <id> --scope <text> [--subject <ref>] [--subject-kind <kind>] [--rubric-ref <ref>]
 ```
 
-Requests a machine evaluation. Subject ref can be a content hash, work item ID, or artifact ID.
+Requests a machine evaluation. Subject ref can be a content hash, work item ID, or artifact ID. Subject kind: work_item, artifact, attempt, finding, plan.
 
 ### dits work eval-complete
 
 ```
-dits work eval-complete <id> --eval-id <id> --verdict <pass|fail|partial> [--subject <ref>]
+dits work eval-complete <id> --eval-id <id> --verdict <pass|fail|partial> [--subject <ref>] [--subject-kind <kind>] [--rubric-ref <ref>] [--summary <text>] [--metrics <json>] [--metrics-file <path>]
 ```
 
-Completes an eval with a machine-generated verdict.
+Completes an eval with a machine-generated verdict. Metrics can be inline JSON or a file path.
+
+### dits work retain
+
+```
+dits work retain <id> --subject <ref> --subject-kind <kind> [--reason <text>] [--eval-ref <eval-id>]
+```
+
+Marks an output (attempt, artifact) as the retained/accepted result. Optionally references the eval that informed this decision.
+
+### dits work discard
+
+```
+dits work discard <id> --subject <ref> --subject-kind <kind> [--reason <text>]
+```
+
+Marks an output as discarded/superseded. If the discarded ref is the currently retained output, clears the retained ref.
 
 ---
 

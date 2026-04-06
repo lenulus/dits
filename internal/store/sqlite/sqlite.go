@@ -51,6 +51,7 @@ func (s *Store) migrate() error {
 		"migrations/006_relations.sql",
 		"migrations/007_coordination.sql",
 		"migrations/008_evals.sql",
+		"migrations/009_outcomes.sql",
 	}
 	for _, m := range migrations {
 		data, err := migrationsFS.ReadFile(m)
@@ -61,7 +62,33 @@ func (s *Store) migrate() error {
 			return fmt.Errorf("executing %s: %w", m, err)
 		}
 	}
+
+	// Idempotent column additions for schema evolution.
+	s.addColumnIfNotExists("work_items", "retained_outcome_ref", "TEXT")
+
 	return nil
+}
+
+func (s *Store) addColumnIfNotExists(table, column, colType string) {
+	rows, err := s.db.Query(fmt.Sprintf("PRAGMA table_info(%s)", table))
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, typ string
+		var notnull int
+		var dflt sql.NullString
+		var pk int
+		if err := rows.Scan(&cid, &name, &typ, &notnull, &dflt, &pk); err != nil {
+			return
+		}
+		if name == column {
+			return // already exists
+		}
+	}
+	s.db.Exec(fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", table, column, colType))
 }
 
 // --- EventStore ---
@@ -276,8 +303,9 @@ func (s *Store) UpsertWorkItem(ctx context.Context, wi *domain.WorkItem) error {
 	_, err = tx.ExecContext(ctx,
 		`INSERT INTO work_items (id, shared_id, kind, title, body, status, priority,
 		  lease_holder, lease_expires_at, current_attempt, blocked, blocked_reason,
+		  retained_outcome_ref,
 		  created_by, created_at, updated_at, closed_at, event_count)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(id) DO UPDATE SET
 		   shared_id = excluded.shared_id,
 		   kind = excluded.kind,
@@ -290,12 +318,13 @@ func (s *Store) UpsertWorkItem(ctx context.Context, wi *domain.WorkItem) error {
 		   current_attempt = excluded.current_attempt,
 		   blocked = excluded.blocked,
 		   blocked_reason = excluded.blocked_reason,
+		   retained_outcome_ref = excluded.retained_outcome_ref,
 		   updated_at = excluded.updated_at,
 		   closed_at = excluded.closed_at,
 		   event_count = excluded.event_count`,
 		wi.ID, sharedID, wi.Kind, wi.Title, wi.Body, wi.Status, wi.Priority,
 		leaseHolder, leaseExpiresAt, currentAttempt,
-		boolToInt(wi.Blocked), wi.BlockedReason,
+		boolToInt(wi.Blocked), wi.BlockedReason, wi.RetainedOutcomeRef,
 		wi.CreatedBy, wi.CreatedAt.UTC().Format(time.RFC3339Nano),
 		wi.UpdatedAt.UTC().Format(time.RFC3339Nano), closedAt, wi.EventCount,
 	)
@@ -477,6 +506,19 @@ func (s *Store) UpsertWorkItem(ctx context.Context, wi *domain.WorkItem) error {
 		}
 	}
 
+	// Replace outcomes.
+	_, _ = tx.ExecContext(ctx, `DELETE FROM work_item_outcomes WHERE work_item_id = ?`, wi.ID)
+	for _, oc := range wi.Outcomes {
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO work_item_outcomes (event_id, work_item_id, subject_kind, subject_ref, decision, reason, eval_ref, actor_id, timestamp)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			oc.EventID, wi.ID, oc.SubjectKind, oc.SubjectRef, oc.Decision, oc.Reason, oc.EvalRef,
+			oc.ActorID, oc.Timestamp.UTC().Format(time.RFC3339Nano),
+		); err != nil {
+			return err
+		}
+	}
+
 	return tx.Commit()
 }
 
@@ -484,7 +526,7 @@ func (s *Store) GetWorkItem(ctx context.Context, id domain.WorkItemID) (*domain.
 	row := s.db.QueryRowContext(ctx,
 		`SELECT id, shared_id, kind, title, body, status, priority,
 		  lease_holder, lease_expires_at, current_attempt, blocked, blocked_reason,
-		  created_by, created_at, updated_at, closed_at, event_count
+		  retained_outcome_ref, created_by, created_at, updated_at, closed_at, event_count
 		 FROM work_items WHERE id = ?`, id)
 	return s.scanWorkItem(ctx, row)
 }
@@ -493,7 +535,7 @@ func (s *Store) GetWorkItemBySharedID(ctx context.Context, id domain.SharedID) (
 	row := s.db.QueryRowContext(ctx,
 		`SELECT id, shared_id, kind, title, body, status, priority,
 		  lease_holder, lease_expires_at, current_attempt, blocked, blocked_reason,
-		  created_by, created_at, updated_at, closed_at, event_count
+		  retained_outcome_ref, created_by, created_at, updated_at, closed_at, event_count
 		 FROM work_items WHERE shared_id = ?`, id)
 	return s.scanWorkItem(ctx, row)
 }
@@ -501,7 +543,7 @@ func (s *Store) GetWorkItemBySharedID(ctx context.Context, id domain.SharedID) (
 func (s *Store) ListWorkItems(ctx context.Context, filter store.WorkItemFilter) ([]domain.WorkItem, error) {
 	query := `SELECT w.id, w.shared_id, w.kind, w.title, w.body, w.status, w.priority,
 	  w.lease_holder, w.lease_expires_at, w.current_attempt, w.blocked, w.blocked_reason,
-	  w.created_by, w.created_at, w.updated_at, w.closed_at, w.event_count
+	  w.retained_outcome_ref, w.created_by, w.created_at, w.updated_at, w.closed_at, w.event_count
 	  FROM work_items w`
 	var conditions []string
 	var args []any
@@ -722,13 +764,13 @@ func scanEventRows(rows *sql.Rows) (*domain.Event, error) {
 
 func (s *Store) scanWorkItem(ctx context.Context, row *sql.Row) (*domain.WorkItem, error) {
 	wi := &domain.WorkItem{}
-	var sharedID, closedAt, leaseHolder, leaseExpiresAt, currentAttempt sql.NullString
+	var sharedID, closedAt, leaseHolder, leaseExpiresAt, currentAttempt, retainedOutcomeRef sql.NullString
 	var createdAt, updatedAt string
 	var blocked int
 
 	err := row.Scan(&wi.ID, &sharedID, &wi.Kind, &wi.Title, &wi.Body, &wi.Status, &wi.Priority,
 		&leaseHolder, &leaseExpiresAt, &currentAttempt, &blocked, &wi.BlockedReason,
-		&wi.CreatedBy, &createdAt, &updatedAt, &closedAt, &wi.EventCount)
+		&retainedOutcomeRef, &wi.CreatedBy, &createdAt, &updatedAt, &closedAt, &wi.EventCount)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
@@ -758,6 +800,10 @@ func (s *Store) scanWorkItem(ctx context.Context, row *sql.Row) (*domain.WorkIte
 		wi.CurrentAttempt = &a
 	}
 	wi.Blocked = blocked != 0
+	if retainedOutcomeRef.Valid {
+		s := retainedOutcomeRef.String
+		wi.RetainedOutcomeRef = &s
+	}
 
 	if err := s.loadWorkItemCollections(ctx, wi); err != nil {
 		return nil, err
@@ -767,13 +813,13 @@ func (s *Store) scanWorkItem(ctx context.Context, row *sql.Row) (*domain.WorkIte
 
 func (s *Store) scanWorkItemRows(ctx context.Context, rows *sql.Rows) (*domain.WorkItem, error) {
 	wi := &domain.WorkItem{}
-	var sharedID, closedAt, leaseHolder, leaseExpiresAt, currentAttempt sql.NullString
+	var sharedID, closedAt, leaseHolder, leaseExpiresAt, currentAttempt, retainedOutcomeRef sql.NullString
 	var createdAt, updatedAt string
 	var blocked int
 
 	err := rows.Scan(&wi.ID, &sharedID, &wi.Kind, &wi.Title, &wi.Body, &wi.Status, &wi.Priority,
 		&leaseHolder, &leaseExpiresAt, &currentAttempt, &blocked, &wi.BlockedReason,
-		&wi.CreatedBy, &createdAt, &updatedAt, &closedAt, &wi.EventCount)
+		&retainedOutcomeRef, &wi.CreatedBy, &createdAt, &updatedAt, &closedAt, &wi.EventCount)
 	if err != nil {
 		return nil, err
 	}
@@ -800,6 +846,10 @@ func (s *Store) scanWorkItemRows(ctx context.Context, rows *sql.Rows) (*domain.W
 		wi.CurrentAttempt = &a
 	}
 	wi.Blocked = blocked != 0
+	if retainedOutcomeRef.Valid {
+		s := retainedOutcomeRef.String
+		wi.RetainedOutcomeRef = &s
+	}
 
 	if err := s.loadWorkItemCollections(ctx, wi); err != nil {
 		return nil, err
@@ -1046,6 +1096,25 @@ func (s *Store) loadWorkItemCollections(ctx context.Context, wi *domain.WorkItem
 			}
 		}
 		wi.Evals = append(wi.Evals, ev)
+	}
+
+	// Outcomes
+	rows11, err := s.db.QueryContext(ctx,
+		`SELECT event_id, subject_kind, subject_ref, decision, reason, eval_ref, actor_id, timestamp
+		 FROM work_item_outcomes WHERE work_item_id = ? ORDER BY timestamp`, wi.ID)
+	if err != nil {
+		return err
+	}
+	defer rows11.Close()
+	wi.Outcomes = []domain.Outcome{}
+	for rows11.Next() {
+		var oc domain.Outcome
+		var ts string
+		if err := rows11.Scan(&oc.EventID, &oc.SubjectKind, &oc.SubjectRef, &oc.Decision, &oc.Reason, &oc.EvalRef, &oc.ActorID, &ts); err != nil {
+			return err
+		}
+		oc.Timestamp, _ = time.Parse(time.RFC3339Nano, ts)
+		wi.Outcomes = append(wi.Outcomes, oc)
 	}
 
 	return nil

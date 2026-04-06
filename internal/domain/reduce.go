@@ -24,6 +24,7 @@ func Reduce(events []Event) (*WorkItem, error) {
 		Findings:     []Finding{},
 		Attempts:     []ExecutionAttempt{},
 		Evals:        []Eval{},
+		Outcomes:     []Outcome{},
 	}
 
 	for _, e := range events {
@@ -466,6 +467,37 @@ func ApplyEvent(wi *WorkItem, e Event) error {
 			ProducedBy:  p.ProducedBy,
 			Timestamp:   e.Timestamp,
 		})
+		wi.UpdatedAt = maxTime(wi.UpdatedAt, e.Timestamp)
+
+	// --- Outcome ---
+
+	case EventWorkOutcomeRetained:
+		var p OutcomeRetainedPayload
+		if err := json.Unmarshal(e.Payload, &p); err != nil {
+			return err
+		}
+		wi.Outcomes = append(wi.Outcomes, Outcome{
+			EventID: e.ID, SubjectKind: p.SubjectKind, SubjectRef: p.SubjectRef,
+			Decision: "retained", Reason: p.Reason, EvalRef: p.EvalRef,
+			ActorID: e.ActorID, Timestamp: e.Timestamp,
+		})
+		wi.RetainedOutcomeRef = &p.SubjectRef
+		wi.UpdatedAt = maxTime(wi.UpdatedAt, e.Timestamp)
+
+	case EventWorkOutcomeDiscarded:
+		var p OutcomeDiscardedPayload
+		if err := json.Unmarshal(e.Payload, &p); err != nil {
+			return err
+		}
+		wi.Outcomes = append(wi.Outcomes, Outcome{
+			EventID: e.ID, SubjectKind: p.SubjectKind, SubjectRef: p.SubjectRef,
+			Decision: "discarded", Reason: p.Reason,
+			ActorID: e.ActorID, Timestamp: e.Timestamp,
+		})
+		// If the discarded ref is the currently retained one, clear it.
+		if wi.RetainedOutcomeRef != nil && *wi.RetainedOutcomeRef == p.SubjectRef {
+			wi.RetainedOutcomeRef = nil
+		}
 		wi.UpdatedAt = maxTime(wi.UpdatedAt, e.Timestamp)
 
 	// --- Relation / Artifact ---

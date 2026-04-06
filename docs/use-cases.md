@@ -55,11 +55,18 @@ dits work eval-request PROJ-42 --scope "failure analysis" --subject-kind attempt
 dits work eval-complete PROJ-42 --eval-id evl_02... --verdict fail \
   --summary "Approach A not viable, try connection pooling"
 
+# Discard the failed attempt's output
+dits work discard PROJ-42 --subject atp_first --subject-kind attempt --reason "Approach A not viable"
+
 # Second attempt with different strategy
 dits work start PROJ-42
 dits work checkpoint PROJ-42 --summary "Trying approach B with connection pooling" --progress 0.5
 dits work checkpoint PROJ-42 --summary "All queries succeeded" --progress 1.0
 dits work complete PROJ-42 --summary "Approach B succeeded"
+
+# Retain the successful attempt's output
+dits work retain PROJ-42 --subject atp_second --subject-kind attempt \
+  --reason "Approach B passed eval" --eval-ref evl_02...
 ```
 
 The event history preserves both attempts. The reducer marks the first attempt as completed (failed) and the second as completed (succeeded). Both are queryable:

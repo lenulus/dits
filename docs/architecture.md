@@ -248,6 +248,7 @@ Seven migrations build the schema incrementally:
 | 006_relations | work_item_relations |
 | 007_coordination | work_item_checkpoints, work_item_observations, work_item_findings, work_item_attempts |
 | 008_evals | work_item_evals |
+| 009_outcomes | work_item_outcomes |
 
 All tables use `CREATE TABLE IF NOT EXISTS` for idempotent migration.
 

@@ -223,6 +223,19 @@ curl http://localhost:8484/api/v2/work/PROJ-1/evals?verdict=pass
 | `subject_kind` | Filter by subject kind (work_item, artifact, attempt, finding, plan) |
 | `verdict` | Filter by verdict (pass, fail, partial) |
 
+### GET /api/v2/work/{id}/outcomes
+
+Outcome decisions (retained/discarded) for a work item.
+
+```bash
+curl http://localhost:8484/api/v2/work/PROJ-1/outcomes
+curl http://localhost:8484/api/v2/work/PROJ-1/outcomes?decision=retained
+```
+
+| Parameter | Description |
+|-----------|-------------|
+| `decision` | Filter by decision: `retained` or `discarded` |
+
 ### GET /api/v2/work/{id}/checkpoints
 
 Checkpoints for a work item, optionally filtered by attempt.

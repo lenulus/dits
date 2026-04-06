@@ -82,6 +82,13 @@ const (
 	EventWorkEvalCompleted EventType = "work.eval_completed"
 )
 
+// --- Outcome Events ---
+
+const (
+	EventWorkOutcomeRetained  EventType = "work.outcome_retained"
+	EventWorkOutcomeDiscarded EventType = "work.outcome_discarded"
+)
+
 // --- Relation / Artifact Events ---
 
 const (
@@ -337,6 +344,21 @@ type EvalCompletedPayload struct {
 	Metrics     json.RawMessage `json:"metrics,omitempty"`
 	Verdict     string          `json:"verdict"` // pass, fail, partial, etc.
 	ProducedBy  *ProducedBy     `json:"produced_by,omitempty"`
+}
+
+// --- Outcome Payloads ---
+
+type OutcomeRetainedPayload struct {
+	SubjectKind string `json:"subject_kind"` // attempt, artifact
+	SubjectRef  string `json:"subject_ref"`
+	Reason      string `json:"reason,omitempty"`
+	EvalRef     string `json:"eval_ref,omitempty"` // eval ID that informed this decision
+}
+
+type OutcomeDiscardedPayload struct {
+	SubjectKind string `json:"subject_kind"`
+	SubjectRef  string `json:"subject_ref"`
+	Reason      string `json:"reason,omitempty"`
 }
 
 // --- Relation / Artifact Payloads ---
