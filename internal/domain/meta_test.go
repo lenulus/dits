@@ -11,7 +11,7 @@ func TestDefaultMetaConfig(t *testing.T) {
 	m := DefaultMetaConfig("PROJ")
 	assert.Equal(t, MetaVersion(1), m.Version)
 	assert.Equal(t, "PROJ", m.ProjectKey)
-	assert.Len(t, m.WorkKinds, 8)
+	assert.Len(t, m.WorkKinds, 9)
 	assert.Len(t, m.Workflows, 3)
 	assert.Len(t, m.Priorities, 4)
 	assert.Len(t, m.Labels, 0)

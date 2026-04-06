@@ -117,6 +117,14 @@ A work item may have multiple execution attempts. Each attempt has a number (seq
 
 Operational coordination state (lease ownership, active attempts, blocked flags) is first-class and independent of workflow status. Status is a human- and policy-facing abstraction. A work item can be `status=in_progress` while also blocked, leased, and on its third attempt.
 
+### Operational Lineage
+
+When two actors diverge offline and both lease/execute against the same work item, the merged DAG after sync contains both branches. The reducer deterministically selects one lease lineage as authoritative (via causal ordering tiebreaks). Attempts on the losing lineage are preserved in history but marked as non-authoritative — they don't drive live coordination state (`LeaseHolder`, `CurrentAttempt`). Attempt numbers are derived from authoritative ordering during materialization.
+
+### Eval vs Review
+
+Eval is machine-performed assessment (rubric/metric-driven, for autonomous control loops like plan-execute-eval-retry). Review is human-performed assessment (approval, critique, governance gates). Both are first-class coordination activities with dedicated event pairs and durable IDs.
+
 ## Provenance Model
 
 Two distinct layers:
@@ -239,6 +247,7 @@ Seven migrations build the schema incrementally:
 | 005_overlay | overlay_annotations, overlay_labels |
 | 006_relations | work_item_relations |
 | 007_coordination | work_item_checkpoints, work_item_observations, work_item_findings, work_item_attempts |
+| 008_evals | work_item_evals |
 
 All tables use `CREATE TABLE IF NOT EXISTS` for idempotent migration.
 

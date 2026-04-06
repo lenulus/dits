@@ -50,6 +50,7 @@ func (s *Store) migrate() error {
 		"migrations/005_overlay.sql",
 		"migrations/006_relations.sql",
 		"migrations/007_coordination.sql",
+		"migrations/008_evals.sql",
 	}
 	for _, m := range migrations {
 		data, err := migrationsFS.ReadFile(m)
@@ -443,10 +444,34 @@ func (s *Store) UpsertWorkItem(ctx context.Context, wi *domain.WorkItem) error {
 			lastCheckpoint = &v
 		}
 		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO work_item_attempts (attempt_id, work_item_id, number, actor_id, started_at, completed_at, status, last_checkpoint)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			`INSERT INTO work_item_attempts (attempt_id, work_item_id, number, actor_id, started_at, completed_at, status, last_checkpoint, authoritative)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			a.AttemptID, wi.ID, a.Number, a.ActorID,
 			a.StartedAt.UTC().Format(time.RFC3339Nano), completedAt, a.Status, lastCheckpoint,
+			boolToInt(a.Authoritative),
+		); err != nil {
+			return err
+		}
+	}
+
+	// Replace evals.
+	_, _ = tx.ExecContext(ctx, `DELETE FROM work_item_evals WHERE work_item_id = ?`, wi.ID)
+	for _, ev := range wi.Evals {
+		var metrics, producedBy *string
+		if ev.Metrics != nil {
+			s := string(ev.Metrics)
+			metrics = &s
+		}
+		if ev.ProducedBy != nil {
+			d, _ := json.Marshal(ev.ProducedBy)
+			s := string(d)
+			producedBy = &s
+		}
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO work_item_evals (eval_id, event_id, work_item_id, subject_ref, metrics, verdict, produced_by, timestamp)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			ev.EvalID, ev.EventID, wi.ID, ev.SubjectRef, metrics, ev.Verdict, producedBy,
+			ev.Timestamp.UTC().Format(time.RFC3339Nano),
 		); err != nil {
 			return err
 		}
@@ -966,7 +991,7 @@ func (s *Store) loadWorkItemCollections(ctx context.Context, wi *domain.WorkItem
 
 	// Attempts
 	rows9, err := s.db.QueryContext(ctx,
-		`SELECT attempt_id, number, actor_id, started_at, completed_at, status, last_checkpoint
+		`SELECT attempt_id, number, actor_id, started_at, completed_at, status, last_checkpoint, authoritative
 		 FROM work_item_attempts WHERE work_item_id = ? ORDER BY number`, wi.ID)
 	if err != nil {
 		return err
@@ -977,10 +1002,12 @@ func (s *Store) loadWorkItemCollections(ctx context.Context, wi *domain.WorkItem
 		var a domain.ExecutionAttempt
 		var startedAt string
 		var completedAt, lastCheckpoint sql.NullString
-		if err := rows9.Scan(&a.AttemptID, &a.Number, &a.ActorID, &startedAt, &completedAt, &a.Status, &lastCheckpoint); err != nil {
+		var authoritative int
+		if err := rows9.Scan(&a.AttemptID, &a.Number, &a.ActorID, &startedAt, &completedAt, &a.Status, &lastCheckpoint, &authoritative); err != nil {
 			return err
 		}
 		a.StartedAt, _ = time.Parse(time.RFC3339Nano, startedAt)
+		a.Authoritative = authoritative != 0
 		if completedAt.Valid {
 			t, _ := time.Parse(time.RFC3339Nano, completedAt.String)
 			a.CompletedAt = &t
@@ -990,6 +1017,35 @@ func (s *Store) loadWorkItemCollections(ctx context.Context, wi *domain.WorkItem
 			a.LastCheckpoint = &eid
 		}
 		wi.Attempts = append(wi.Attempts, a)
+	}
+
+	// Evals
+	rows10, err := s.db.QueryContext(ctx,
+		`SELECT eval_id, event_id, subject_ref, metrics, verdict, produced_by, timestamp
+		 FROM work_item_evals WHERE work_item_id = ? ORDER BY timestamp`, wi.ID)
+	if err != nil {
+		return err
+	}
+	defer rows10.Close()
+	wi.Evals = []domain.Eval{}
+	for rows10.Next() {
+		var ev domain.Eval
+		var ts string
+		var metrics, producedBy sql.NullString
+		if err := rows10.Scan(&ev.EvalID, &ev.EventID, &ev.SubjectRef, &metrics, &ev.Verdict, &producedBy, &ts); err != nil {
+			return err
+		}
+		ev.Timestamp, _ = time.Parse(time.RFC3339Nano, ts)
+		if metrics.Valid {
+			ev.Metrics = json.RawMessage(metrics.String)
+		}
+		if producedBy.Valid {
+			var pb domain.ProducedBy
+			if err := json.Unmarshal([]byte(producedBy.String), &pb); err == nil {
+				ev.ProducedBy = &pb
+			}
+		}
+		wi.Evals = append(wi.Evals, ev)
 	}
 
 	return nil

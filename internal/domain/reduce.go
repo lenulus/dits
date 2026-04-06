@@ -23,6 +23,7 @@ func Reduce(events []Event) (*WorkItem, error) {
 		Observations: []Observation{},
 		Findings:     []Finding{},
 		Attempts:     []ExecutionAttempt{},
+		Evals:        []Eval{},
 	}
 
 	for _, e := range events {
@@ -30,6 +31,9 @@ func Reduce(events []Event) (*WorkItem, error) {
 			return nil, fmt.Errorf("applying event %s: %w", e.ID, err)
 		}
 	}
+
+	// Post-reduction: compute operational lineage and attempt authority.
+	resolveOperationalLineage(wi)
 
 	wi.HeadEvents = Heads(events)
 	wi.EventCount = len(events)
@@ -436,6 +440,31 @@ func ApplyEvent(wi *WorkItem, e Event) error {
 		}
 		wi.UpdatedAt = maxTime(wi.UpdatedAt, e.Timestamp)
 
+	// --- Eval ---
+
+	case EventWorkEvalRequested:
+		var p EvalRequestedPayload
+		if err := json.Unmarshal(e.Payload, &p); err != nil {
+			return err
+		}
+		wi.UpdatedAt = maxTime(wi.UpdatedAt, e.Timestamp)
+
+	case EventWorkEvalCompleted:
+		var p EvalCompletedPayload
+		if err := json.Unmarshal(e.Payload, &p); err != nil {
+			return err
+		}
+		wi.Evals = append(wi.Evals, Eval{
+			EvalID:     p.EvalID,
+			EventID:    e.ID,
+			SubjectRef: p.SubjectRef,
+			Metrics:    p.Metrics,
+			Verdict:    p.Verdict,
+			ProducedBy: p.ProducedBy,
+			Timestamp:  e.Timestamp,
+		})
+		wi.UpdatedAt = maxTime(wi.UpdatedAt, e.Timestamp)
+
 	// --- Relation / Artifact ---
 
 	case EventWorkLinked:
@@ -488,6 +517,56 @@ func ApplyEvent(wi *WorkItem, e Event) error {
 	}
 
 	return nil
+}
+
+// --- Operational Lineage ---
+
+// resolveOperationalLineage computes which execution attempts belong to the
+// winning lease lineage and marks them as authoritative. Attempts started by
+// the current lease holder are authoritative. All others are orphaned
+// (preserved in history but do not drive live operational state).
+//
+// This also recomputes CurrentAttempt to only reference authoritative attempts,
+// and derives attempt numbers from authoritative ordering.
+func resolveOperationalLineage(wi *WorkItem) {
+	if len(wi.Attempts) == 0 {
+		return
+	}
+
+	// If there's no lease holder (released or never leased), all attempts
+	// that existed before lease release are authoritative.
+	// If there is a lease holder, only attempts by that actor are authoritative.
+	var authNumber uint32
+	var latestAuthRunning *AttemptID
+
+	for i := range wi.Attempts {
+		a := &wi.Attempts[i]
+
+		if wi.LeaseHolder == nil {
+			// No active lease — all attempts are authoritative.
+			a.Authoritative = true
+		} else {
+			// Active lease — only attempts by the lease holder are authoritative.
+			a.Authoritative = (a.ActorID == *wi.LeaseHolder)
+		}
+
+		if a.Authoritative {
+			authNumber++
+			a.Number = authNumber
+
+			if a.Status == "running" {
+				id := a.AttemptID
+				latestAuthRunning = &id
+			}
+		} else {
+			// Non-authoritative attempts keep their original number for display
+			// but do not affect operational state.
+			a.Number = 0
+		}
+	}
+
+	// CurrentAttempt only points to the latest authoritative running attempt.
+	wi.CurrentAttempt = latestAuthRunning
 }
 
 // --- Helpers ---

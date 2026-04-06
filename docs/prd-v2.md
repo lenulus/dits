@@ -72,6 +72,7 @@ A work item is the unit of coordination. It has a kind. An "issue" is a work ite
 | `AttemptID` | `atp_<ULID>` | Execution attempt identifier |
 | `ReviewID` | `rev_<ULID>` | Review instance identifier |
 | `HandoffID` | `hof_<ULID>` | Handoff instance identifier |
+| `EvalID` | `evl_<ULID>` | Eval instance identifier |
 
 ### 5.2 Work Item (Primary Object)
 
@@ -129,7 +130,8 @@ Default kinds, extensible via meta:
 | `decision` | A choice to be made between alternatives |
 | `execution` | A concrete run of a plan or procedure |
 | `handoff` | A transfer of responsibility between actors |
-| `artifact_review` | Evaluation of produced artifacts |
+| `artifact_review` | Evaluation of produced artifacts (may be subsumed by `eval`) |
+| `eval` | Machine-performed assessment of artifacts, attempts, findings, or plans |
 
 ### 5.4 Artifact
 
@@ -242,7 +244,26 @@ type Finding struct {
 }
 ```
 
-### 5.10 Relation Types
+### 5.10 Eval (Machine Assessment)
+
+An eval is a structured, repeatable machine-performed assessment. Evals target artifacts, attempts, findings, plans, or whole work items. Distinct from reviews, which are human-performed assessments for governance and approval.
+
+> **Eval is machine-performed assessment. Review is human-performed assessment.**
+> Evals are rubric- or metric-driven and intended to support automated control loops (plan → execute → eval → retry). Reviews are human judgments used for governance, approval, critique, or policy gates.
+
+```go
+type Eval struct {
+    EvalID     EvalID
+    EventID    EventID
+    SubjectRef string          // content hash, work item ID, or artifact ID being evaluated
+    Metrics    json.RawMessage // structured metric results
+    Verdict    string          // pass, fail, partial, etc.
+    ProducedBy *ProducedBy
+    Timestamp  time.Time
+}
+```
+
+### 5.11 Relation Types
 
 Formalized core set, extensible via meta:
 
@@ -351,7 +372,14 @@ type Event struct {
 | `work.handoff_accepted` | `{handoff_id, comment?}` |
 | `work.handoff_rejected` | `{handoff_id, reason}` |
 
-### 6.7 Relation / Artifact Events
+### 6.7 Eval Events
+
+| Event | Payload |
+|-------|---------|
+| `work.eval_requested` | `{eval_id, subject_ref, rubric_ref?, scope}` |
+| `work.eval_completed` | `{eval_id, subject_ref, metrics?, verdict, produced_by?}` |
+
+### 6.8 Relation / Artifact Events
 
 | Event | Payload |
 |-------|---------|
@@ -438,6 +466,37 @@ Actor A                          Reviewer
 ```
 
 Each review has a `ReviewID` for durable sub-entity identity. Multiple concurrent reviews are supported (each with a distinct `review_id`).
+
+### 7.6 Operational Lineage
+
+When two actors diverge offline and both emit lease/execution events against the same work item, the merged DAG after sync contains both branches. The reducer must deterministically select one as the authoritative coordination lineage.
+
+**Rules:**
+
+1. **Lease validity is gated by causal order.** The reducer processes events in deterministic causal order. When two concurrent `work.leased` events exist, the one that appears later in causal order (by the standard tiebreak: timestamp → event ID) becomes the active lease. The earlier one is superseded.
+
+2. **Downstream events inherit lineage validity.** Execution attempts, checkpoints, and completion events on a superseded lease branch are preserved in history but marked as non-authoritative. They do not drive live operational state (`LeaseHolder`, `CurrentAttempt`, etc.).
+
+3. **Attempt numbering is derived, not trusted.** `AttemptNumber` in `work.execution_started` payloads is advisory. The reducer computes canonical attempt numbers from the causal ordering of authoritative `work.execution_started` events during materialization.
+
+**Split-brain example:**
+
+```
+Branch A (offline):  leased(A1) → execution_started(X1) → checkpointed(C1)
+Branch B (offline):  leased(B1) → execution_started(X2) → checkpointed(C2)
+
+After sync and causal ordering:
+  - A1 and B1 are concurrent (same parent)
+  - Tiebreak: e.g., B1 wins (later timestamp or higher event ID)
+  - B1's lease is authoritative
+  - X2, C2 are authoritative attempts/checkpoints
+  - A1 is superseded; X1, C1 are non-authoritative (orphaned)
+  - All events remain in history for audit
+```
+
+**Materialization:**
+
+The `Authoritative` flag on `ExecutionAttempt` indicates whether the attempt belongs to the winning lease lineage. `CurrentAttempt` only references authoritative attempts. Orphaned attempts and their checkpoints remain queryable for debugging and audit but do not affect the work item's live coordination state.
 
 ---
 
@@ -545,6 +604,7 @@ func DefaultMetaConfig(projectKey string) MetaConfig {
             {Slug: "execution", Name: "Execution", WorkflowSlug: "execution"},
             {Slug: "handoff", Name: "Handoff", WorkflowSlug: "default"},
             {Slug: "artifact_review", Name: "Artifact Review", WorkflowSlug: "review"},
+            {Slug: "eval", Name: "Eval", WorkflowSlug: "default"},
         },
         Workflows: []Workflow{
             {
@@ -736,8 +796,10 @@ These hold at all times, regardless of event ordering or node topology:
 6. **Operational state is independent of status** — lease, attempt, and blocked state do not imply or require a particular workflow status
 7. **Events are immutable** — no event is ever modified or deleted after creation
 8. **The coordination table is a rebuildable cache** — it can be dropped and reconstructed from events + wall-clock time
-9. **Attempt IDs are globally unique, attempt numbers are monotonic and unique per work item** — numbering is sequential at the materialized level but the system does not guarantee gap-free assignment under concurrency
-10. **ReviewIDs and HandoffIDs uniquely identify durable sub-entities** — they are not ephemeral references but first-class objects within a work item's history, supporting concurrent reviews and handoffs
+9. **Attempt IDs are globally unique, attempt numbers are derived** — AttemptID is canonical; attempt numbers are computed from the authoritative execution-start events during materialization, not relied upon as client-assigned global truth
+10. **ReviewIDs, HandoffIDs, and EvalIDs uniquely identify durable sub-entities** — they are not ephemeral references but first-class objects within a work item's history, supporting concurrent reviews, handoffs, and evals
+11. **Operational conflict resolution** — when concurrent lease lineages exist, the reducer deterministically selects one authoritative coordination lineage; events on losing lineages remain in history but do not affect live operational state
+12. **Eval is machine judgment, review is human judgment** — evals are rubric/metric-driven for autonomous control loops; reviews are human assessments for governance and approval gates
 
 ---
 
@@ -745,15 +807,15 @@ These hold at all times, regardless of event ordering or node topology:
 
 Implementation decisions to resolve during build-out, not design blockers:
 
-1. **Lease acquisition: events-only or server-side CAS?** The current design represents leases purely as events with a materialized coordination table. Under high contention, two clients could both emit `work.leased` events against the same work item before either syncs. The server would then need to reject one during sync. An alternative is a server-side compare-and-set endpoint (`POST /api/v2/work/{id}/lease`) that atomically checks lease state before accepting. Events-only is simpler and consistent with the architecture; CAS is stronger under contention.
+1. ~~**Lease acquisition: events-only or server-side CAS?**~~ **Resolved:** Events-only with operational lineage. Concurrent lease events are both accepted; the reducer deterministically selects one as authoritative via causal ordering. See §7.6.
 
-2. **Attempt number allocation under concurrency.** If two actors both start an attempt against the same work item concurrently, they may both assign `attempt_number=2`. The reducer must handle this — either by accepting both (with distinct AttemptIDs) or by rejecting based on lease ownership. The invariant says numbers are monotonic and unique per work item at the materialized level, but the allocation mechanism needs to be specified.
+2. ~~**Attempt number allocation under concurrency.**~~ **Resolved:** AttemptID is canonical. Attempt numbers are derived from authoritative execution-start events during materialization, not trusted from client payloads. See §7.6.
 
 3. **Review/handoff acceptance side effects.** When a handoff is accepted, should the system automatically update assignment or create a lease for the accepting actor? Or does acceptance remain purely historical, requiring the acceptor to explicitly lease and start execution? The latter is more composable; the former is more ergonomic.
 
 4. **Blob garbage collection.** When an artifact is removed from a work item, the blob remains in the content-addressed store. When (if ever) are unreferenced blobs cleaned up? Options: never (storage is cheap), manual GC command, reference-counted with periodic sweep. This is a deployment concern, not a protocol concern, but should be documented.
 
-5. **Eval as a first-class concept.** Future versions may introduce evals as either a work kind or structured sub-entity for rubric-based assessment of artifacts, attempts, findings, or plans. Evals differ from reviews in that they are metric/rubric-driven, often repeatable, and intended for comparison over time. Likely more fundamental than `artifact_review` as a long-term primitive — if those two concepts compete, eval probably has deeper legs. Not in scope for initial implementation, but the artifact/provenance/finding infrastructure is designed to support it.
+5. ~~**Eval as a first-class concept.**~~ **Resolved:** Eval implemented as work kind + event pair (`work.eval_requested` / `work.eval_completed`). Eval = machine judgment, review = human judgment. `artifact_review` may be subsumed by `eval` long-term.
 
 ---
 

@@ -507,7 +507,7 @@ func TestMeta_SaveAndGet(t *testing.T) {
 	require.NotNil(t, got)
 	assert.Equal(t, "TEST", got.ProjectKey)
 	assert.Equal(t, domain.MetaVersion(1), got.Version)
-	assert.Len(t, got.WorkKinds, 8)
+	assert.Len(t, got.WorkKinds, 9)
 }
 
 func TestMeta_SaveIfVersion_Success(t *testing.T) {

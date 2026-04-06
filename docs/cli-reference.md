@@ -225,7 +225,23 @@ Hands off the work item to another actor.
 dits work review <id> --scope <text>
 ```
 
-Requests a review of the work item.
+Requests a review of the work item (human judgment).
+
+### dits work eval-request
+
+```
+dits work eval-request <id> --scope <text> [--subject <ref>]
+```
+
+Requests a machine evaluation. Subject ref can be a content hash, work item ID, or artifact ID.
+
+### dits work eval-complete
+
+```
+dits work eval-complete <id> --eval-id <id> --verdict <pass|fail|partial> [--subject <ref>]
+```
+
+Completes an eval with a machine-generated verdict.
 
 ---
 

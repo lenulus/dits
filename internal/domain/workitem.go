@@ -52,13 +52,14 @@ type WorkItem struct {
 	ClosedAt  *time.Time
 
 	// Collections
-	Comments    []Comment
-	Artifacts   []Artifact
-	Relations   []Relation
-	Checkpoints []Checkpoint
+	Comments     []Comment
+	Artifacts    []Artifact
+	Relations    []Relation
+	Checkpoints  []Checkpoint
 	Observations []Observation
-	Findings    []Finding
-	Attempts    []ExecutionAttempt
+	Findings     []Finding
+	Attempts     []ExecutionAttempt
+	Evals        []Eval
 
 	EventCount int
 	HeadEvents []EventID
@@ -97,12 +98,13 @@ type Relation struct {
 // ExecutionAttempt tracks a single attempt to execute a work item.
 type ExecutionAttempt struct {
 	AttemptID      AttemptID
-	Number         uint32 // 1, 2, 3...
+	Number         uint32 // derived from authoritative ordering during materialization
 	ActorID        ActorID
 	StartedAt      time.Time
 	CompletedAt    *time.Time
 	Status         string // running, completed, failed, abandoned
 	LastCheckpoint *EventID
+	Authoritative  bool // true if this attempt belongs to the winning lease lineage
 }
 
 // Checkpoint records progress within an execution attempt.
@@ -135,4 +137,16 @@ type Finding struct {
 	ProducedBy   *ProducedBy
 	Retracted    bool
 	Timestamp    time.Time
+}
+
+// Eval is a structured, repeatable machine-performed assessment.
+// Eval = machine judgment. Review = human judgment.
+type Eval struct {
+	EvalID     EvalID
+	EventID    EventID
+	SubjectRef string // content hash, work item ID, or artifact ID being evaluated
+	Metrics    json.RawMessage
+	Verdict    string // pass, fail, partial, etc.
+	ProducedBy *ProducedBy
+	Timestamp  time.Time
 }

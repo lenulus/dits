@@ -277,8 +277,9 @@ func TestReduce_ExecutionAttempt(t *testing.T) {
 	assert.NotNil(t, wi.Attempts[0].LastCheckpoint)
 	assert.Equal(t, EventID("evt_004"), *wi.Attempts[0].LastCheckpoint)
 
-	require.NotNil(t, wi.CurrentAttempt)
-	assert.Equal(t, AttemptID("atp_001"), *wi.CurrentAttempt)
+	// Attempt is completed, so no running attempt.
+	assert.Nil(t, wi.CurrentAttempt, "no running attempt after completion")
+	assert.True(t, wi.Attempts[0].Authoritative)
 
 	require.Len(t, wi.Checkpoints, 2)
 	assert.Equal(t, 0.5, wi.Checkpoints[0].Progress)
@@ -326,8 +327,8 @@ func TestReduce_FailedAttemptRetry(t *testing.T) {
 	assert.Equal(t, "failed", wi.Attempts[0].Status)
 	assert.Equal(t, "completed", wi.Attempts[1].Status)
 	assert.Equal(t, uint32(2), wi.Attempts[1].Number)
-	require.NotNil(t, wi.CurrentAttempt)
-	assert.Equal(t, AttemptID("atp_002"), *wi.CurrentAttempt)
+	// Both attempts completed/failed — no running attempt.
+	assert.Nil(t, wi.CurrentAttempt, "no running attempt after all completed/failed")
 }
 
 func TestReduce_BlockedUnblocked(t *testing.T) {
@@ -705,4 +706,216 @@ func TestReduce_CommentWithProvenance(t *testing.T) {
 	require.Len(t, wi.Comments, 1)
 	require.NotNil(t, wi.Comments[0].ProducedBy)
 	assert.Equal(t, "claude-3.5-sonnet", wi.Comments[0].ProducedBy.Model)
+}
+
+func TestReduce_EvalRequestedAndCompleted(t *testing.T) {
+	t0 := time.Date(2026, 3, 29, 10, 0, 0, 0, time.UTC)
+	events := []Event{
+		{
+			ID: "evt_001", WorkItemID: "wrk_001", Type: EventWorkCreated,
+			ActorID: "actor_alice", Timestamp: t0,
+			Payload: MustMarshalPayload(WorkCreatedPayload{Title: "Eval test", Kind: "eval"}),
+		},
+		{
+			ID: "evt_002", WorkItemID: "wrk_001", Type: EventWorkEvalRequested,
+			ParentEventIDs: []EventID{"evt_001"},
+			ActorID: "actor_agent1", Timestamp: t0.Add(1 * time.Minute),
+			Payload: MustMarshalPayload(EvalRequestedPayload{
+				EvalID: "evl_001", SubjectRef: "sha256:abc", Scope: "code quality",
+			}),
+		},
+		{
+			ID: "evt_003", WorkItemID: "wrk_001", Type: EventWorkEvalCompleted,
+			ParentEventIDs: []EventID{"evt_002"},
+			ActorID: "actor_agent1", Timestamp: t0.Add(2 * time.Minute),
+			Payload: MustMarshalPayload(EvalCompletedPayload{
+				EvalID:     "evl_001",
+				SubjectRef: "sha256:abc",
+				Metrics:    json.RawMessage(`{"score": 0.92, "issues": 2}`),
+				Verdict:    "pass",
+				ProducedBy: &ProducedBy{ActorID: "actor_agent1", Model: "judge-model"},
+			}),
+		},
+	}
+
+	wi, err := Reduce(events)
+	require.NoError(t, err)
+
+	// eval_requested does not materialize
+	// eval_completed materializes
+	require.Len(t, wi.Evals, 1)
+	assert.Equal(t, EvalID("evl_001"), wi.Evals[0].EvalID)
+	assert.Equal(t, "sha256:abc", wi.Evals[0].SubjectRef)
+	assert.Equal(t, "pass", wi.Evals[0].Verdict)
+	assert.JSONEq(t, `{"score": 0.92, "issues": 2}`, string(wi.Evals[0].Metrics))
+	require.NotNil(t, wi.Evals[0].ProducedBy)
+	assert.Equal(t, "judge-model", wi.Evals[0].ProducedBy.Model)
+}
+
+func TestReduce_SplitBrainLeaseLineage(t *testing.T) {
+	// Two agents diverge offline and both lease + execute against the same work item.
+	// After merge, only the winning lease lineage's attempts are authoritative.
+	t0 := time.Date(2026, 3, 29, 10, 0, 0, 0, time.UTC)
+
+	createEvt := Event{
+		ID: "evt_001", WorkItemID: "wrk_001", Type: EventWorkCreated,
+		ActorID: "actor_alice", Timestamp: t0,
+		Payload: MustMarshalPayload(WorkCreatedPayload{Title: "Split brain test", Kind: "execution"}),
+	}
+
+	// Branch A: agent1 leases and starts (earlier timestamp)
+	leaseA := Event{
+		ID: "evt_A1", WorkItemID: "wrk_001", Type: EventWorkLeased,
+		ParentEventIDs: []EventID{"evt_001"},
+		ActorID: "actor_agent1", Timestamp: t0.Add(1 * time.Minute),
+		Payload: MustMarshalPayload(LeasedPayload{
+			LeaseID: "lea_A", LeaseDurationSec: 300,
+			LeaseExpiresAt: t0.Add(6 * time.Minute), Generation: 1,
+		}),
+	}
+	startA := Event{
+		ID: "evt_A2", WorkItemID: "wrk_001", Type: EventWorkExecutionStarted,
+		ParentEventIDs: []EventID{"evt_A1"},
+		ActorID: "actor_agent1", Timestamp: t0.Add(2 * time.Minute),
+		Payload: MustMarshalPayload(ExecutionStartedPayload{AttemptID: "atp_A1", AttemptNumber: 1}),
+	}
+	cpA := Event{
+		ID: "evt_A3", WorkItemID: "wrk_001", Type: EventWorkCheckpointed,
+		ParentEventIDs: []EventID{"evt_A2"},
+		ActorID: "actor_agent1", Timestamp: t0.Add(3 * time.Minute),
+		Payload: MustMarshalPayload(CheckpointedPayload{AttemptID: "atp_A1", Summary: "A progress", Progress: 0.5}),
+	}
+
+	// Branch B: agent2 leases and starts (later timestamp — wins in causal order)
+	leaseB := Event{
+		ID: "evt_B1", WorkItemID: "wrk_001", Type: EventWorkLeased,
+		ParentEventIDs: []EventID{"evt_001"},
+		ActorID: "actor_agent2", Timestamp: t0.Add(1*time.Minute + 30*time.Second),
+		Payload: MustMarshalPayload(LeasedPayload{
+			LeaseID: "lea_B", LeaseDurationSec: 300,
+			LeaseExpiresAt: t0.Add(6*time.Minute + 30*time.Second), Generation: 1,
+		}),
+	}
+	startB := Event{
+		ID: "evt_B2", WorkItemID: "wrk_001", Type: EventWorkExecutionStarted,
+		ParentEventIDs: []EventID{"evt_B1"},
+		ActorID: "actor_agent2", Timestamp: t0.Add(2*time.Minute + 30*time.Second),
+		Payload: MustMarshalPayload(ExecutionStartedPayload{AttemptID: "atp_B1", AttemptNumber: 1}),
+	}
+
+	// After sync, all events are in the DAG. Causal order processes them:
+	// evt_001 -> (concurrent: evt_A1 @ t+1m, evt_B1 @ t+1m30s)
+	// In causal order, A1 comes before B1 (earlier timestamp).
+	// Then A2, A3, B2 follow.
+	// Last-writer-wins: B1 is later in causal order, so B's lease wins.
+	events := CausalOrder([]Event{createEvt, leaseA, startA, cpA, leaseB, startB})
+
+	wi, err := Reduce(events)
+	require.NoError(t, err)
+
+	// LeaseHolder should be agent2 (B won)
+	require.NotNil(t, wi.LeaseHolder)
+	assert.Equal(t, ActorID("actor_agent2"), *wi.LeaseHolder)
+
+	// Both attempts exist
+	require.Len(t, wi.Attempts, 2)
+
+	// A's attempt is NOT authoritative (wrong lease holder)
+	attemptA := findAttempt(wi.Attempts, "atp_A1")
+	require.NotNil(t, attemptA)
+	assert.False(t, attemptA.Authoritative, "A's attempt should be non-authoritative (losing lease)")
+	assert.Equal(t, uint32(0), attemptA.Number, "non-authoritative attempt number should be 0")
+
+	// B's attempt IS authoritative
+	attemptB := findAttempt(wi.Attempts, "atp_B1")
+	require.NotNil(t, attemptB)
+	assert.True(t, attemptB.Authoritative, "B's attempt should be authoritative (winning lease)")
+	assert.Equal(t, uint32(1), attemptB.Number, "authoritative attempt should be numbered 1")
+
+	// CurrentAttempt should be B's (the authoritative running one)
+	require.NotNil(t, wi.CurrentAttempt)
+	assert.Equal(t, AttemptID("atp_B1"), *wi.CurrentAttempt)
+
+	// Both checkpoints still exist (history preserved)
+	assert.Len(t, wi.Checkpoints, 1) // only A had a checkpoint
+}
+
+func TestReduce_NoLeaseAllAttemptsAuthoritative(t *testing.T) {
+	// When there's no lease conflict, all attempts should be authoritative.
+	t0 := time.Date(2026, 3, 29, 10, 0, 0, 0, time.UTC)
+	events := []Event{
+		{
+			ID: "evt_001", WorkItemID: "wrk_001", Type: EventWorkCreated,
+			ActorID: "actor_alice", Timestamp: t0,
+			Payload: MustMarshalPayload(WorkCreatedPayload{Title: "Normal", Kind: "execution"}),
+		},
+		{
+			ID: "evt_002", WorkItemID: "wrk_001", Type: EventWorkLeased,
+			ParentEventIDs: []EventID{"evt_001"},
+			ActorID: "actor_agent1", Timestamp: t0.Add(1 * time.Minute),
+			Payload: MustMarshalPayload(LeasedPayload{
+				LeaseID: "lea_001", LeaseDurationSec: 300,
+				LeaseExpiresAt: t0.Add(6 * time.Minute), Generation: 1,
+			}),
+		},
+		{
+			ID: "evt_003", WorkItemID: "wrk_001", Type: EventWorkExecutionStarted,
+			ParentEventIDs: []EventID{"evt_002"},
+			ActorID: "actor_agent1", Timestamp: t0.Add(2 * time.Minute),
+			Payload: MustMarshalPayload(ExecutionStartedPayload{AttemptID: "atp_001", AttemptNumber: 1}),
+		},
+		{
+			ID: "evt_004", WorkItemID: "wrk_001", Type: EventWorkExecutionCompleted,
+			ParentEventIDs: []EventID{"evt_003"},
+			ActorID: "actor_agent1", Timestamp: t0.Add(3 * time.Minute),
+			Payload: MustMarshalPayload(ExecutionCompletedPayload{AttemptID: "atp_001", Summary: "done"}),
+		},
+	}
+
+	wi, err := Reduce(events)
+	require.NoError(t, err)
+
+	require.Len(t, wi.Attempts, 1)
+	assert.True(t, wi.Attempts[0].Authoritative)
+	assert.Equal(t, uint32(1), wi.Attempts[0].Number)
+}
+
+func TestReduce_LeaseReleasedAllAttemptsAuthoritative(t *testing.T) {
+	// After lease release, no active lease holder — all attempts authoritative.
+	t0 := time.Date(2026, 3, 29, 10, 0, 0, 0, time.UTC)
+	events := []Event{
+		{
+			ID: "evt_001", WorkItemID: "wrk_001", Type: EventWorkCreated,
+			ActorID: "actor_alice", Timestamp: t0,
+			Payload: MustMarshalPayload(WorkCreatedPayload{Title: "Released", Kind: "execution"}),
+		},
+		{
+			ID: "evt_002", WorkItemID: "wrk_001", Type: EventWorkLeased,
+			ParentEventIDs: []EventID{"evt_001"},
+			ActorID: "actor_agent1", Timestamp: t0.Add(1 * time.Minute),
+			Payload: MustMarshalPayload(LeasedPayload{
+				LeaseID: "lea_001", LeaseDurationSec: 300,
+				LeaseExpiresAt: t0.Add(6 * time.Minute), Generation: 1,
+			}),
+		},
+		{
+			ID: "evt_003", WorkItemID: "wrk_001", Type: EventWorkExecutionStarted,
+			ParentEventIDs: []EventID{"evt_002"},
+			ActorID: "actor_agent1", Timestamp: t0.Add(2 * time.Minute),
+			Payload: MustMarshalPayload(ExecutionStartedPayload{AttemptID: "atp_001", AttemptNumber: 1}),
+		},
+		{
+			ID: "evt_004", WorkItemID: "wrk_001", Type: EventWorkLeaseReleased,
+			ParentEventIDs: []EventID{"evt_003"},
+			ActorID: "actor_agent1", Timestamp: t0.Add(3 * time.Minute),
+			Payload: MustMarshalPayload(LeaseReleasedPayload{LeaseID: "lea_001", Reason: "done"}),
+		},
+	}
+
+	wi, err := Reduce(events)
+	require.NoError(t, err)
+
+	assert.Nil(t, wi.LeaseHolder)
+	require.Len(t, wi.Attempts, 1)
+	assert.True(t, wi.Attempts[0].Authoritative, "no active lease = all authoritative")
 }

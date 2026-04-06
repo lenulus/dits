@@ -52,6 +52,10 @@ type ReviewID string
 // Format: hof_<ULID>
 type HandoffID string
 
+// EvalID is a globally unique, client-generated eval identifier.
+// Format: evl_<ULID>
+type EvalID string
+
 var (
 	entropyMu sync.Mutex
 	entropy   = ulid.Monotonic(rand.Reader, 0)
@@ -106,6 +110,10 @@ func NewHandoffID() HandoffID {
 	return HandoffID(fmt.Sprintf("hof_%s", newULID().String()))
 }
 
+func NewEvalID() EvalID {
+	return EvalID(fmt.Sprintf("evl_%s", newULID().String()))
+}
+
 func (id WorkItemID) String() string { return string(id) }
 func (id EventID) String() string    { return string(id) }
 func (id SharedID) String() string   { return string(id) }
@@ -116,3 +124,4 @@ func (id LeaseID) String() string    { return string(id) }
 func (id AttemptID) String() string  { return string(id) }
 func (id ReviewID) String() string   { return string(id) }
 func (id HandoffID) String() string  { return string(id) }
+func (id EvalID) String() string     { return string(id) }

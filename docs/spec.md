@@ -72,6 +72,10 @@ Client-generated. Format: `rev_<ULID>`.
 
 Client-generated. Format: `hof_<ULID>`.
 
+### 2.11 Eval ID
+
+Client-generated. Format: `evl_<ULID>`.
+
 ### 2.11 ULID Generation
 
 All ULIDs use a monotonic entropy source to prevent collisions at sub-millisecond creation rates. Entropy is reset if exhausted.
@@ -168,6 +172,13 @@ All state changes are recorded as immutable events.
 | `work.handed_off` | `{handoff_id, from, to, context, artifact_refs?}` |
 | `work.handoff_accepted` | `{handoff_id, comment?}` |
 | `work.handoff_rejected` | `{handoff_id, reason}` |
+
+#### Eval Events
+
+| Type | Payload |
+|------|---------|
+| `work.eval_requested` | `{eval_id, subject_ref, rubric_ref?, scope}` |
+| `work.eval_completed` | `{eval_id, subject_ref, metrics?, verdict, produced_by?}` |
 
 #### Relation / Artifact Events
 
@@ -279,6 +290,14 @@ Simple flag — latest event wins. `work.blocked` sets blocked with reason, `wor
 ### 6.4 Status Independence
 
 Operational state (lease, attempt, blocked) is independent of workflow status. A work item can be `status=in_progress`, `leased=true`, `attempts=3`, `blocked=true` simultaneously.
+
+### 6.5 Operational Lineage
+
+When concurrent lease lineages exist (e.g., two offline agents both lease the same work item), the reducer deterministically selects one as authoritative via causal ordering tiebreaks. Events on losing lineages are preserved in history but marked as non-authoritative. Attempt numbers are derived from authoritative execution-start events during materialization, not trusted from client payloads.
+
+### 6.6 Eval vs Review
+
+Eval is machine-performed assessment. Review is human-performed assessment. Evals are rubric/metric-driven for autonomous control loops (plan, execute, eval, retry). Reviews are human judgments for governance and approval gates. Both are first-class coordination activities.
 
 ---
 
@@ -482,6 +501,7 @@ Seven incremental migrations:
 | 005 | overlay_annotations, overlay_labels |
 | 006 | work_item_relations |
 | 007 | work_item_checkpoints, work_item_observations, work_item_findings, work_item_attempts |
+| 008 | work_item_evals |
 
 ---
 
@@ -499,3 +519,5 @@ Seven incremental migrations:
 10. **Operational state is independent** — lease, attempt, and blocked state do not imply workflow status
 11. **Provenance is two-layered** — EmittedBy (event producer) is distinct from ProducedBy (content producer)
 12. **Coordination is event-sourced** — leases, attempts, and findings are derived from events, not stored separately
+13. **Operational conflict resolution** — concurrent lease lineages resolved deterministically; losing lineage preserved as non-authoritative history
+14. **Eval is machine judgment, review is human judgment** — evals for autonomous loops, reviews for governance gates

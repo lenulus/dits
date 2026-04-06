@@ -41,6 +41,7 @@ CREATE TABLE IF NOT EXISTS work_item_attempts (
     started_at      TEXT NOT NULL,
     completed_at    TEXT,
     status          TEXT NOT NULL DEFAULT 'running',
-    last_checkpoint TEXT
+    last_checkpoint TEXT,
+    authoritative   INTEGER NOT NULL DEFAULT 1
 );
 CREATE INDEX IF NOT EXISTS idx_work_item_attempts_wi ON work_item_attempts(work_item_id);

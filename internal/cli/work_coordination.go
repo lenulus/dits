@@ -509,6 +509,84 @@ var workReviewCmd = &cobra.Command{
 	},
 }
 
+var workEvalRequestCmd = &cobra.Command{
+	Use:   "eval-request <id>",
+	Short: "Request a machine evaluation",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		proj, err := loadProject()
+		if err != nil {
+			return err
+		}
+		defer proj.DB.Close()
+
+		ctx := context.Background()
+		wi, err := resolveWorkItem(ctx, proj, args[0])
+		if err != nil {
+			return err
+		}
+
+		scope, _ := cmd.Flags().GetString("scope")
+		subjectRef, _ := cmd.Flags().GetString("subject")
+
+		evalID := domain.NewEvalID()
+		heads, _ := proj.DB.GetHeads(ctx, wi.ID)
+		event := domain.Event{
+			ID: domain.NewEventID(), WorkItemID: wi.ID, Type: domain.EventWorkEvalRequested,
+			ParentEventIDs: heads, ActorID: proj.Config.ActorID, Timestamp: time.Now().UTC(),
+			Payload: domain.MustMarshalPayload(domain.EvalRequestedPayload{
+				EvalID: evalID, SubjectRef: subjectRef, Scope: scope,
+			}),
+		}
+
+		if err := appendAndMaterialize(ctx, proj, wi.ID, event); err != nil {
+			return err
+		}
+		fmt.Printf("Eval requested on %s (%s): %s\n", workItemDisplayID(wi), evalID, scope)
+		return nil
+	},
+}
+
+var workEvalCompleteCmd = &cobra.Command{
+	Use:   "eval-complete <id>",
+	Short: "Complete a machine evaluation with verdict",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		proj, err := loadProject()
+		if err != nil {
+			return err
+		}
+		defer proj.DB.Close()
+
+		ctx := context.Background()
+		wi, err := resolveWorkItem(ctx, proj, args[0])
+		if err != nil {
+			return err
+		}
+
+		evalID, _ := cmd.Flags().GetString("eval-id")
+		subjectRef, _ := cmd.Flags().GetString("subject")
+		verdict, _ := cmd.Flags().GetString("verdict")
+
+		heads, _ := proj.DB.GetHeads(ctx, wi.ID)
+		event := domain.Event{
+			ID: domain.NewEventID(), WorkItemID: wi.ID, Type: domain.EventWorkEvalCompleted,
+			ParentEventIDs: heads, ActorID: proj.Config.ActorID, Timestamp: time.Now().UTC(),
+			Payload: domain.MustMarshalPayload(domain.EvalCompletedPayload{
+				EvalID:     domain.EvalID(evalID),
+				SubjectRef: subjectRef,
+				Verdict:    verdict,
+			}),
+		}
+
+		if err := appendAndMaterialize(ctx, proj, wi.ID, event); err != nil {
+			return err
+		}
+		fmt.Printf("Eval completed on %s: %s\n", workItemDisplayID(wi), verdict)
+		return nil
+	},
+}
+
 func init() {
 	workCmd.AddCommand(workLeaseCmd)
 	workCmd.AddCommand(workLeaseReleaseCmd)
@@ -523,6 +601,8 @@ func init() {
 	workCmd.AddCommand(workPlanCmd)
 	workCmd.AddCommand(workHandoffCmd)
 	workCmd.AddCommand(workReviewCmd)
+	workCmd.AddCommand(workEvalRequestCmd)
+	workCmd.AddCommand(workEvalCompleteCmd)
 
 	workLeaseReleaseCmd.Flags().String("reason", "", "Release reason")
 
@@ -560,4 +640,14 @@ func init() {
 
 	workReviewCmd.Flags().StringP("scope", "s", "", "Review scope (required)")
 	workReviewCmd.MarkFlagRequired("scope")
+
+	workEvalRequestCmd.Flags().StringP("scope", "s", "", "Eval scope (required)")
+	workEvalRequestCmd.Flags().String("subject", "", "Subject reference (content hash, work item ID, etc.)")
+	workEvalRequestCmd.MarkFlagRequired("scope")
+
+	workEvalCompleteCmd.Flags().String("eval-id", "", "Eval ID from eval-request (required)")
+	workEvalCompleteCmd.Flags().String("subject", "", "Subject reference")
+	workEvalCompleteCmd.Flags().String("verdict", "", "Verdict: pass, fail, partial (required)")
+	workEvalCompleteCmd.MarkFlagRequired("eval-id")
+	workEvalCompleteCmd.MarkFlagRequired("verdict")
 }
