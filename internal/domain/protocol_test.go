@@ -340,6 +340,140 @@ func TestProtocol_OutcomeDiscardedNonexistent(t *testing.T) {
 	assert.Contains(t, err.Error(), "not found in work item")
 }
 
+// --- Lease release identity ---
+
+func TestProtocol_LeaseReleaseMatchingID(t *testing.T) {
+	wi := baseWorkItem()
+	wi.LeaseHolder = leaseHolder("actor_a")
+	lid := LeaseID("lea_001")
+	wi.LeaseID = &lid
+	e := Event{Type: EventWorkLeaseReleased, ActorID: "actor_a",
+		Payload: MustMarshalPayload(LeaseReleasedPayload{LeaseID: "lea_001"})}
+	assert.NoError(t, ValidateProtocol(e, wi))
+}
+
+func TestProtocol_LeaseReleaseMismatchedID(t *testing.T) {
+	wi := baseWorkItem()
+	wi.LeaseHolder = leaseHolder("actor_a")
+	lid := LeaseID("lea_001")
+	wi.LeaseID = &lid
+	e := Event{Type: EventWorkLeaseReleased, ActorID: "actor_a",
+		Payload: MustMarshalPayload(LeaseReleasedPayload{LeaseID: "lea_999"})}
+	err := ValidateProtocolFull(e, wi, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "does not match active lease")
+}
+
+// --- Event-level reference integrity ---
+
+func makeLookup(keys ...string) EventLookup {
+	m := make(map[string]bool)
+	for _, k := range keys {
+		m[k] = true
+	}
+	return func(key string) bool { return m[key] }
+}
+
+func TestProtocol_PlanAcceptedWithProposal(t *testing.T) {
+	wi := baseWorkItem()
+	lookup := makeLookup(EventLookupKey(EventWorkPlanProposed, "evt_plan1"))
+	e := Event{Type: EventWorkPlanAccepted,
+		Payload: MustMarshalPayload(PlanAcceptedPayload{PlanEventID: "evt_plan1"})}
+	assert.NoError(t, ValidateProtocolFull(e, wi, lookup))
+}
+
+func TestProtocol_PlanAcceptedWithoutProposal(t *testing.T) {
+	wi := baseWorkItem()
+	lookup := makeLookup() // empty — no prior events
+	e := Event{Type: EventWorkPlanAccepted,
+		Payload: MustMarshalPayload(PlanAcceptedPayload{PlanEventID: "evt_plan1"})}
+	err := ValidateProtocolFull(e, wi, lookup)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "plan_proposed event")
+}
+
+func TestProtocol_PlanRejectedWithoutProposal(t *testing.T) {
+	wi := baseWorkItem()
+	lookup := makeLookup()
+	e := Event{Type: EventWorkPlanRejected,
+		Payload: MustMarshalPayload(PlanRejectedPayload{PlanEventID: "evt_plan1"})}
+	err := ValidateProtocolFull(e, wi, lookup)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "plan_proposed event")
+}
+
+func TestProtocol_ReviewCompletedWithRequest(t *testing.T) {
+	wi := baseWorkItem()
+	lookup := makeLookup(EventLookupKey(EventWorkReviewRequested, "rev_001"))
+	e := Event{Type: EventWorkReviewCompleted,
+		Payload: MustMarshalPayload(ReviewCompletedPayload{ReviewID: "rev_001", Verdict: "approve"})}
+	assert.NoError(t, ValidateProtocolFull(e, wi, lookup))
+}
+
+func TestProtocol_ReviewCompletedWithoutRequest(t *testing.T) {
+	wi := baseWorkItem()
+	lookup := makeLookup()
+	e := Event{Type: EventWorkReviewCompleted,
+		Payload: MustMarshalPayload(ReviewCompletedPayload{ReviewID: "rev_001", Verdict: "approve"})}
+	err := ValidateProtocolFull(e, wi, lookup)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "review_requested")
+}
+
+func TestProtocol_EvalCompletedWithRequest(t *testing.T) {
+	wi := baseWorkItem()
+	lookup := makeLookup(EventLookupKey(EventWorkEvalRequested, "evl_001"))
+	e := Event{Type: EventWorkEvalCompleted,
+		Payload: MustMarshalPayload(EvalCompletedPayload{EvalID: "evl_001", Verdict: "pass"})}
+	assert.NoError(t, ValidateProtocolFull(e, wi, lookup))
+}
+
+func TestProtocol_EvalCompletedWithoutRequest(t *testing.T) {
+	wi := baseWorkItem()
+	lookup := makeLookup()
+	e := Event{Type: EventWorkEvalCompleted,
+		Payload: MustMarshalPayload(EvalCompletedPayload{EvalID: "evl_001", Verdict: "pass"})}
+	err := ValidateProtocolFull(e, wi, lookup)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "eval_requested")
+}
+
+func TestProtocol_HandoffAcceptedWithHandoff(t *testing.T) {
+	wi := baseWorkItem()
+	lookup := makeLookup(EventLookupKey(EventWorkHandedOff, "hof_001"))
+	e := Event{Type: EventWorkHandoffAccepted,
+		Payload: MustMarshalPayload(HandoffAcceptedPayload{HandoffID: "hof_001"})}
+	assert.NoError(t, ValidateProtocolFull(e, wi, lookup))
+}
+
+func TestProtocol_HandoffAcceptedWithoutHandoff(t *testing.T) {
+	wi := baseWorkItem()
+	lookup := makeLookup()
+	e := Event{Type: EventWorkHandoffAccepted,
+		Payload: MustMarshalPayload(HandoffAcceptedPayload{HandoffID: "hof_001"})}
+	err := ValidateProtocolFull(e, wi, lookup)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "handed_off")
+}
+
+func TestProtocol_HandoffRejectedWithoutHandoff(t *testing.T) {
+	wi := baseWorkItem()
+	lookup := makeLookup()
+	e := Event{Type: EventWorkHandoffRejected,
+		Payload: MustMarshalPayload(HandoffRejectedPayload{HandoffID: "hof_001"})}
+	err := ValidateProtocolFull(e, wi, lookup)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "handed_off")
+}
+
+func TestProtocol_RefCheckSkippedWithNilLookup(t *testing.T) {
+	// Without a lookup function, reference checks are skipped (backward compat).
+	wi := baseWorkItem()
+	e := Event{Type: EventWorkPlanAccepted,
+		Payload: MustMarshalPayload(PlanAcceptedPayload{PlanEventID: "evt_nonexistent"})}
+	assert.NoError(t, ValidateProtocol(e, wi)) // no error — lookup is nil
+}
+
 // --- Passthrough events ---
 
 func TestProtocol_LifecycleEventsPass(t *testing.T) {

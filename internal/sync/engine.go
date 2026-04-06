@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 
@@ -410,9 +411,23 @@ func (e *Engine) advisoryProtocolValidation(ctx context.Context, events []domain
 			}
 		}
 
+		// Track seen events for reference integrity lookups.
+		seenEvents := make(map[string]bool)
+
+		// Seed with existing events from the DB for this work item.
+		existingEvents, _ := e.db.GetEventsForWorkItem(ctx, wiID)
+		for _, existing := range existingEvents {
+			seenEvents[domain.EventLookupKey(existing.Type, string(existing.ID))] = true
+			if refKey := extractSyncPayloadRefKey(existing); refKey != "" {
+				seenEvents[refKey] = true
+			}
+		}
+
+		hasEvent := func(key string) bool { return seenEvents[key] }
+
 		for _, evt := range ordered {
-			// Validate against current simulated state.
-			if err := domain.ValidateProtocol(evt, &simWI); err != nil {
+			// Validate against current simulated state + seen events.
+			if err := domain.ValidateProtocolFull(evt, &simWI, hasEvent); err != nil {
 				e.logger.Warn("protocol violation (advisory)",
 					"event_id", evt.ID,
 					"event_type", evt.Type,
@@ -424,6 +439,37 @@ func (e *Engine) advisoryProtocolValidation(ctx context.Context, events []domain
 
 			// Apply event to simulated state for next iteration.
 			domain.ApplyEvent(&simWI, evt)
+
+			// Record this event for future reference integrity lookups.
+			seenEvents[domain.EventLookupKey(evt.Type, string(evt.ID))] = true
+			if refKey := extractSyncPayloadRefKey(evt); refKey != "" {
+				seenEvents[refKey] = true
+			}
 		}
 	}
+}
+
+// extractSyncPayloadRefKey extracts a lookup key from an event's payload
+// for reference integrity during sync advisory validation.
+func extractSyncPayloadRefKey(evt domain.Event) string {
+	switch evt.Type {
+	case domain.EventWorkPlanProposed:
+		return domain.EventLookupKey(domain.EventWorkPlanProposed, string(evt.ID))
+	case domain.EventWorkReviewRequested:
+		var p domain.ReviewRequestedPayload
+		if json.Unmarshal(evt.Payload, &p) == nil {
+			return domain.EventLookupKey(domain.EventWorkReviewRequested, string(p.ReviewID))
+		}
+	case domain.EventWorkEvalRequested:
+		var p domain.EvalRequestedPayload
+		if json.Unmarshal(evt.Payload, &p) == nil {
+			return domain.EventLookupKey(domain.EventWorkEvalRequested, string(p.EvalID))
+		}
+	case domain.EventWorkHandedOff:
+		var p domain.HandedOffPayload
+		if json.Unmarshal(evt.Payload, &p) == nil {
+			return domain.EventLookupKey(domain.EventWorkHandedOff, string(p.HandoffID))
+		}
+	}
+	return ""
 }

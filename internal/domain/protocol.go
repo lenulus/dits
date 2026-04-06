@@ -5,23 +5,43 @@ import (
 	"fmt"
 )
 
+// EventLookup checks whether a prior event of the given type with the given
+// reference ID exists for this work item. The key format is "<eventType>:<id>".
+// Callers provide the implementation:
+//   - CLI: queries events table
+//   - Sync: tracks seen events in a map during incremental batch simulation
+//   - Tests: simple map[string]bool
+type EventLookup func(key string) bool
+
+// EventLookupKey builds a lookup key from an event type and reference ID.
+func EventLookupKey(eventType EventType, id string) string {
+	return string(eventType) + ":" + id
+}
+
 // ValidateProtocol checks coordination invariants against the current materialized
-// WorkItem state. This is the second validation tier:
+// WorkItem state. Convenience wrapper that skips event-level reference checks.
+func ValidateProtocol(e Event, wi *WorkItem) error {
+	return ValidateProtocolFull(e, wi, nil)
+}
+
+// ValidateProtocolFull checks coordination invariants and, when a lookup function
+// is provided, validates cross-event references (plan acceptance → prior proposal,
+// review completion → prior request, etc.).
 //
+// Three validation tiers:
 //  1. Schema validation (ValidateEvent) — checks meta references
-//  2. Protocol validation (ValidateProtocol) — checks coordination invariants
+//  2. Protocol validation (ValidateProtocolFull) — checks coordination invariants
 //  3. Reducer (ApplyEvent) — deterministic materialization, no rejections
 //
 // Protocol validation is authoritative at event creation time (CLI). During sync
-// ingestion, it is advisory (log warnings, don't reject) because the reducer
-// handles concurrent offline divergence via operational lineage.
+// ingestion, it is advisory (log warnings, don't reject).
 //
 // wi may be nil for work.created events (no prior state exists).
-func ValidateProtocol(e Event, wi *WorkItem) error {
+// hasEvent may be nil to skip reference integrity checks.
+func ValidateProtocolFull(e Event, wi *WorkItem, hasEvent EventLookup) error {
 	switch e.Type {
 
 	case EventWorkCreated:
-		// No prior state needed. Valid as root event.
 		return nil
 
 	case EventWorkLeased:
@@ -42,6 +62,13 @@ func ValidateProtocol(e Event, wi *WorkItem) error {
 		if e.ActorID != *wi.LeaseHolder {
 			return fmt.Errorf("cannot release lease: actor %s is not lease holder %s", e.ActorID, *wi.LeaseHolder)
 		}
+		// Validate lease identity if provided.
+		var p LeaseReleasedPayload
+		if err := json.Unmarshal(e.Payload, &p); err == nil {
+			if p.LeaseID != "" && wi.LeaseID != nil && p.LeaseID != *wi.LeaseID {
+				return fmt.Errorf("cannot release lease: lease ID %s does not match active lease %s", p.LeaseID, *wi.LeaseID)
+			}
+		}
 
 	case EventWorkLeaseRenewed:
 		if wi == nil {
@@ -53,7 +80,6 @@ func ValidateProtocol(e Event, wi *WorkItem) error {
 		if e.ActorID != *wi.LeaseHolder {
 			return fmt.Errorf("cannot renew lease: actor %s is not lease holder %s", e.ActorID, *wi.LeaseHolder)
 		}
-		// Validate generation monotonicity.
 		var p LeaseRenewedPayload
 		if err := json.Unmarshal(e.Payload, &p); err == nil {
 			if p.Generation <= wi.LeaseGeneration {
@@ -71,7 +97,6 @@ func ValidateProtocol(e Event, wi *WorkItem) error {
 		if e.ActorID != *wi.LeaseHolder {
 			return fmt.Errorf("cannot start execution: actor %s is not lease holder %s", e.ActorID, *wi.LeaseHolder)
 		}
-		// Check for running authoritative attempt.
 		for _, a := range wi.Attempts {
 			if a.Status == "running" && a.Authoritative {
 				return fmt.Errorf("cannot start execution: attempt %s is already running", a.AttemptID)
@@ -88,7 +113,6 @@ func ValidateProtocol(e Event, wi *WorkItem) error {
 		if wi.LeaseHolder != nil && e.ActorID != *wi.LeaseHolder {
 			return fmt.Errorf("cannot complete/fail attempt: actor %s is not lease holder %s", e.ActorID, *wi.LeaseHolder)
 		}
-		// Verify the referenced attempt is running.
 		var p struct {
 			AttemptID AttemptID `json:"attempt_id"`
 		}
@@ -121,9 +145,7 @@ func ValidateProtocol(e Event, wi *WorkItem) error {
 			return fmt.Errorf("cannot unblock: not blocked")
 		}
 
-	// --- Reference integrity checks ---
-	// These validate that cross-event references point to existing entities
-	// in the materialized WorkItem state.
+	// --- Reference integrity against materialized state ---
 
 	case EventWorkFindingRetracted:
 		if wi != nil {
@@ -144,8 +166,7 @@ func ValidateProtocol(e Event, wi *WorkItem) error {
 
 	case EventWorkOutcomeRetained, EventWorkOutcomeDiscarded:
 		if wi != nil {
-			var subjectRef string
-			var subjectKind string
+			var subjectRef, subjectKind string
 			if e.Type == EventWorkOutcomeRetained {
 				var p OutcomeRetainedPayload
 				if err := json.Unmarshal(e.Payload, &p); err == nil {
@@ -166,13 +187,59 @@ func ValidateProtocol(e Event, wi *WorkItem) error {
 			}
 		}
 
-	// NOTE: Reference integrity for plans (plan_accepted → plan_proposed),
-	// reviews (review_completed → review_requested), handoffs
-	// (handoff_accepted → handed_off), and evals (eval_completed →
-	// eval_requested) requires event-level lookups in the DAG, not just
-	// materialized WorkItem state. These events are not materialized into
-	// sub-entity collections. Full reference integrity for these event
-	// families is a future improvement.
+	// --- Event-level reference integrity (requires lookup function) ---
+
+	case EventWorkPlanAccepted, EventWorkPlanRejected:
+		if hasEvent != nil {
+			var p struct {
+				PlanEventID EventID `json:"plan_event_id"`
+			}
+			if err := json.Unmarshal(e.Payload, &p); err == nil && p.PlanEventID != "" {
+				key := EventLookupKey(EventWorkPlanProposed, string(p.PlanEventID))
+				if !hasEvent(key) {
+					return fmt.Errorf("cannot accept/reject plan: plan_proposed event %s not found", p.PlanEventID)
+				}
+			}
+		}
+
+	case EventWorkReviewCompleted:
+		if hasEvent != nil {
+			var p struct {
+				ReviewID ReviewID `json:"review_id"`
+			}
+			if err := json.Unmarshal(e.Payload, &p); err == nil && p.ReviewID != "" {
+				key := EventLookupKey(EventWorkReviewRequested, string(p.ReviewID))
+				if !hasEvent(key) {
+					return fmt.Errorf("cannot complete review: review_requested with ID %s not found", p.ReviewID)
+				}
+			}
+		}
+
+	case EventWorkEvalCompleted:
+		if hasEvent != nil {
+			var p struct {
+				EvalID EvalID `json:"eval_id"`
+			}
+			if err := json.Unmarshal(e.Payload, &p); err == nil && p.EvalID != "" {
+				key := EventLookupKey(EventWorkEvalRequested, string(p.EvalID))
+				if !hasEvent(key) {
+					return fmt.Errorf("cannot complete eval: eval_requested with ID %s not found", p.EvalID)
+				}
+			}
+		}
+
+	case EventWorkHandoffAccepted, EventWorkHandoffRejected:
+		if hasEvent != nil {
+			var p struct {
+				HandoffID HandoffID `json:"handoff_id"`
+			}
+			if err := json.Unmarshal(e.Payload, &p); err == nil && p.HandoffID != "" {
+				key := EventLookupKey(EventWorkHandedOff, string(p.HandoffID))
+				if !hasEvent(key) {
+					return fmt.Errorf("cannot accept/reject handoff: handed_off with ID %s not found", p.HandoffID)
+				}
+			}
+		}
 	}
 
 	return nil
@@ -195,15 +262,12 @@ func subjectExistsInWorkItem(wi *WorkItem, kind, ref string) bool {
 			}
 		}
 	default:
-		// Unknown kind — allow through (soft check).
 		return true
 	}
 	return false
 }
 
-// findAttemptInSlice finds an attempt by ID in a slice. Returns nil if not found.
-// This is a local helper to avoid importing the reduce.go helper (which operates
-// on mutable slices).
+// findAttemptInSlice finds an attempt by ID in a slice.
 func findAttemptInSlice(attempts []ExecutionAttempt, id AttemptID) *ExecutionAttempt {
 	for i := range attempts {
 		if attempts[i].AttemptID == id {

@@ -881,9 +881,31 @@ func signEvent(proj *project.Project, e *domain.Event) error {
 }
 
 func appendAndMaterialize(ctx context.Context, proj *project.Project, workItemID domain.WorkItemID, event domain.Event) error {
-	// Protocol validation: check coordination invariants against current state.
+	// Protocol validation: check coordination invariants + reference integrity.
 	existing, _ := proj.DB.GetWorkItem(ctx, workItemID)
-	if err := domain.ValidateProtocol(event, existing); err != nil {
+
+	// Build event-lookup function for reference integrity checks.
+	// Queries the event log for prior events matching type+ID.
+	hasEvent := func(key string) bool {
+		// key format: "<eventType>:<id>"
+		allEvents, err := proj.DB.GetEventsForWorkItem(ctx, workItemID)
+		if err != nil {
+			return false
+		}
+		for _, e := range allEvents {
+			evtKey := domain.EventLookupKey(e.Type, string(e.ID))
+			if evtKey == key {
+				return true
+			}
+			// Also check payload IDs for sub-entity references.
+			if payloadKey := extractPayloadRefKey(e); payloadKey == key {
+				return true
+			}
+		}
+		return false
+	}
+
+	if err := domain.ValidateProtocolFull(event, existing, hasEvent); err != nil {
 		return err
 	}
 
@@ -911,6 +933,32 @@ func appendAndMaterialize(ctx context.Context, proj *project.Project, workItemID
 	}
 
 	return proj.DB.UpsertWorkItem(ctx, wi)
+}
+
+// extractPayloadRefKey extracts a lookup key from an event's payload for
+// reference integrity. Maps events that CREATE sub-entities to their lookup keys.
+func extractPayloadRefKey(e domain.Event) string {
+	switch e.Type {
+	case domain.EventWorkPlanProposed:
+		// Plans are referenced by the event ID of the proposal.
+		return domain.EventLookupKey(domain.EventWorkPlanProposed, string(e.ID))
+	case domain.EventWorkReviewRequested:
+		var p domain.ReviewRequestedPayload
+		if json.Unmarshal(e.Payload, &p) == nil {
+			return domain.EventLookupKey(domain.EventWorkReviewRequested, string(p.ReviewID))
+		}
+	case domain.EventWorkEvalRequested:
+		var p domain.EvalRequestedPayload
+		if json.Unmarshal(e.Payload, &p) == nil {
+			return domain.EventLookupKey(domain.EventWorkEvalRequested, string(p.EvalID))
+		}
+	case domain.EventWorkHandedOff:
+		var p domain.HandedOffPayload
+		if json.Unmarshal(e.Payload, &p) == nil {
+			return domain.EventLookupKey(domain.EventWorkHandedOff, string(p.HandoffID))
+		}
+	}
+	return ""
 }
 
 func workItemDisplayID(wi *domain.WorkItem) string {
