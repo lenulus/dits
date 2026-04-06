@@ -14,6 +14,7 @@ import (
 	"github.com/lenulus/pf/internal/domain"
 	"github.com/lenulus/pf/internal/server"
 	"github.com/lenulus/pf/internal/store/sqlite"
+	dsync "github.com/lenulus/pf/internal/sync"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"log/slog"
@@ -87,7 +88,7 @@ func getJSON(t *testing.T, srv *server.Server, path string) map[string]any {
 
 func TestV2_ListWorkItems(t *testing.T) {
 	srv, db := setupServer(t)
-	t0 := time.Date(2026, 4, 1, 10, 0, 0, 0, time.UTC)
+	t0 := time.Now().UTC().Truncate(time.Second)
 
 	seedWorkItem(t, db, "wrk_001", "Task one", "task", "actor_a", t0)
 	seedWorkItem(t, db, "wrk_002", "Bug report", "issue", "actor_b", t0.Add(time.Minute))
@@ -102,7 +103,7 @@ func TestV2_ListWorkItems(t *testing.T) {
 
 func TestV2_GetWorkItem(t *testing.T) {
 	srv, db := setupServer(t)
-	t0 := time.Date(2026, 4, 1, 10, 0, 0, 0, time.UTC)
+	t0 := time.Now().UTC().Truncate(time.Second)
 
 	seedWorkItem(t, db, "wrk_001", "My task", "task", "actor_a", t0)
 
@@ -122,7 +123,7 @@ func TestV2_GetWorkItem_NotFound(t *testing.T) {
 func TestV2_ReadyFilter(t *testing.T) {
 	srv, db := setupServer(t)
 	ctx := context.Background()
-	t0 := time.Date(2026, 4, 1, 10, 0, 0, 0, time.UTC)
+	t0 := time.Now().UTC().Truncate(time.Second)
 
 	// Create 3 work items: one open, one blocked, one leased
 	seedWorkItem(t, db, "wrk_open", "Open task", "task", "actor_a", t0)
@@ -161,7 +162,7 @@ func TestV2_ReadyFilter(t *testing.T) {
 func TestV2_BlockedFilter(t *testing.T) {
 	srv, db := setupServer(t)
 	ctx := context.Background()
-	t0 := time.Date(2026, 4, 1, 10, 0, 0, 0, time.UTC)
+	t0 := time.Now().UTC().Truncate(time.Second)
 
 	seedWorkItem(t, db, "wrk_001", "Normal", "task", "actor_a", t0)
 	seedWorkItem(t, db, "wrk_002", "Blocked", "task", "actor_a", t0.Add(time.Minute))
@@ -180,7 +181,7 @@ func TestV2_BlockedFilter(t *testing.T) {
 func TestV2_ClaimedByFilter(t *testing.T) {
 	srv, db := setupServer(t)
 	ctx := context.Background()
-	t0 := time.Date(2026, 4, 1, 10, 0, 0, 0, time.UTC)
+	t0 := time.Now().UTC().Truncate(time.Second)
 
 	seedWorkItem(t, db, "wrk_001", "Task", "execution", "actor_a", t0)
 
@@ -204,7 +205,7 @@ func TestV2_ClaimedByFilter(t *testing.T) {
 func TestV2_WorkItemEvents(t *testing.T) {
 	srv, db := setupServer(t)
 	ctx := context.Background()
-	t0 := time.Date(2026, 4, 1, 10, 0, 0, 0, time.UTC)
+	t0 := time.Now().UTC().Truncate(time.Second)
 
 	seedWorkItem(t, db, "wrk_001", "Task", "task", "actor_a", t0)
 
@@ -226,7 +227,7 @@ func TestV2_WorkItemEvents(t *testing.T) {
 func TestV2_WorkItemArtifacts(t *testing.T) {
 	srv, db := setupServer(t)
 	ctx := context.Background()
-	t0 := time.Date(2026, 4, 1, 10, 0, 0, 0, time.UTC)
+	t0 := time.Now().UTC().Truncate(time.Second)
 
 	seedWorkItem(t, db, "wrk_001", "Investigation", "investigation", "actor_a", t0)
 
@@ -258,7 +259,7 @@ func TestV2_WorkItemArtifacts(t *testing.T) {
 func TestV2_WorkItemAttempts(t *testing.T) {
 	srv, db := setupServer(t)
 	ctx := context.Background()
-	t0 := time.Date(2026, 4, 1, 10, 0, 0, 0, time.UTC)
+	t0 := time.Now().UTC().Truncate(time.Second)
 
 	seedWorkItem(t, db, "wrk_001", "Execution", "execution", "actor_a", t0)
 
@@ -276,7 +277,7 @@ func TestV2_WorkItemAttempts(t *testing.T) {
 func TestV2_WorkItemCheckpoints(t *testing.T) {
 	srv, db := setupServer(t)
 	ctx := context.Background()
-	t0 := time.Date(2026, 4, 1, 10, 0, 0, 0, time.UTC)
+	t0 := time.Now().UTC().Truncate(time.Second)
 
 	seedWorkItem(t, db, "wrk_001", "Execution", "execution", "actor_a", t0)
 
@@ -309,7 +310,7 @@ func TestV2_WorkItemCheckpoints(t *testing.T) {
 
 func TestV2_ListEvents(t *testing.T) {
 	srv, db := setupServer(t)
-	t0 := time.Date(2026, 4, 1, 10, 0, 0, 0, time.UTC)
+	t0 := time.Now().UTC().Truncate(time.Second)
 
 	seedWorkItem(t, db, "wrk_001", "Task A", "task", "actor_a", t0)
 	seedWorkItem(t, db, "wrk_002", "Task B", "task", "actor_b", t0.Add(time.Minute))
@@ -407,7 +408,7 @@ func TestV1_SyncHandler_InvalidJSON(t *testing.T) {
 func TestV2_ArtifactRoleFilter(t *testing.T) {
 	srv, db := setupServer(t)
 	ctx := context.Background()
-	t0 := time.Date(2026, 4, 1, 10, 0, 0, 0, time.UTC)
+	t0 := time.Now().UTC().Truncate(time.Second)
 
 	seedWorkItem(t, db, "wrk_001", "Investigation", "investigation", "actor_a", t0)
 
@@ -442,4 +443,124 @@ func TestV2_ArtifactRoleFilter(t *testing.T) {
 
 	result = getJSON(t, srv, "/api/v2/work/wrk_001/artifacts?role=proposal")
 	assert.Equal(t, float64(1), result["count"])
+}
+
+func TestE2E_TwoClientSyncViaHTTP(t *testing.T) {
+	// Server setup.
+	dir := t.TempDir()
+	serverDB, err := sqlite.Open(filepath.Join(dir, "server.db"))
+	require.NoError(t, err)
+	defer serverDB.Close()
+	meta := domain.DefaultMetaConfig("E2E")
+	require.NoError(t, serverDB.SaveMeta(context.Background(), &meta))
+	blobs, _ := blob.NewFSStore(filepath.Join(dir, "server-blobs"))
+	srv := server.New(serverDB, blobs, slog.Default())
+	ts := httptest.NewServer(srv)
+	defer ts.Close()
+
+	// Client A setup.
+	clientADB, err := sqlite.Open(filepath.Join(dir, "clientA.db"))
+	require.NoError(t, err)
+	defer clientADB.Close()
+	require.NoError(t, clientADB.SaveMeta(context.Background(), &meta))
+
+	// Client B setup.
+	clientBDB, err := sqlite.Open(filepath.Join(dir, "clientB.db"))
+	require.NoError(t, err)
+	defer clientBDB.Close()
+	require.NoError(t, clientBDB.SaveMeta(context.Background(), &meta))
+
+	ctx := context.Background()
+	nodeA := domain.NodeID("client-A")
+	nodeB := domain.NodeID("client-B")
+	serverNode := domain.NodeID("server")
+	t0 := time.Now().UTC().Truncate(time.Second)
+
+	// Client A: create work item locally.
+	wiID := domain.WorkItemID("wrk_e2e_001")
+	evt := domain.Event{
+		ID: domain.NewEventID(), WorkItemID: wiID, Type: domain.EventWorkCreated,
+		ActorID: "actor_a", Timestamp: t0,
+		Payload: domain.MustMarshalPayload(domain.WorkCreatedPayload{Title: "E2E test", Kind: "task"}),
+	}
+	require.NoError(t, clientADB.AppendEvents(ctx, []domain.Event{evt}))
+	// Materialize locally.
+	events, _ := clientADB.GetEventsForWorkItem(ctx, wiID)
+	wi, _ := domain.Reduce(domain.CausalOrder(events))
+	clientADB.UpsertWorkItem(ctx, wi)
+
+	// Client A syncs to server via HTTP.
+	engineA := dsync.NewEngine(clientADB)
+	reqA, err := engineA.BuildSyncRequest(ctx, nodeA, "E2E", serverNode)
+	require.NoError(t, err)
+	assert.Len(t, reqA.Events, 1)
+
+	respA := syncHTTP(t, ts.URL, reqA)
+	require.NoError(t, engineA.ApplySync(ctx, respA, serverNode))
+
+	// Verify server has the work item.
+	serverWI, _ := serverDB.GetWorkItem(ctx, wiID)
+	require.NotNil(t, serverWI)
+	assert.Equal(t, "E2E test", serverWI.Title)
+	assert.NotEmpty(t, serverWI.SharedID) // server assigned shared ID
+
+	// Client B syncs from server — gets A's work item.
+	engineB := dsync.NewEngine(clientBDB)
+	reqB, _ := engineB.BuildSyncRequest(ctx, nodeB, "E2E", serverNode)
+	respB := syncHTTP(t, ts.URL, reqB)
+	require.NoError(t, engineB.ApplySync(ctx, respB, serverNode))
+
+	wiB, _ := clientBDB.GetWorkItem(ctx, wiID)
+	require.NotNil(t, wiB)
+	assert.Equal(t, "E2E test", wiB.Title)
+	assert.NotEmpty(t, wiB.SharedID) // shared ID propagated
+
+	// Client B adds a comment.
+	headsB, _ := clientBDB.GetHeads(ctx, wiID)
+	commentEvt := domain.Event{
+		ID: domain.NewEventID(), WorkItemID: wiID, Type: domain.EventWorkCommented,
+		ParentEventIDs: headsB, ActorID: "actor_b", Timestamp: t0.Add(time.Minute),
+		Payload: domain.MustMarshalPayload(domain.CommentPayload{Body: "Hello from B"}),
+	}
+	require.NoError(t, clientBDB.AppendEvents(ctx, []domain.Event{commentEvt}))
+	events, _ = clientBDB.GetEventsForWorkItem(ctx, wiID)
+	wi, _ = domain.Reduce(domain.CausalOrder(events))
+	wi.SharedID = wiB.SharedID
+	clientBDB.UpsertWorkItem(ctx, wi)
+
+	// Client B syncs comment to server.
+	reqB2, _ := engineB.BuildSyncRequest(ctx, nodeB, "E2E", serverNode)
+	assert.Len(t, reqB2.Events, 1)
+	respB2 := syncHTTP(t, ts.URL, reqB2)
+	require.NoError(t, engineB.ApplySync(ctx, respB2, serverNode))
+
+	// Client A syncs — gets B's comment.
+	reqA2, _ := engineA.BuildSyncRequest(ctx, nodeA, "E2E", serverNode)
+	respA2 := syncHTTP(t, ts.URL, reqA2)
+	assert.Len(t, respA2.Events, 1)
+	require.NoError(t, engineA.ApplySync(ctx, respA2, serverNode))
+
+	wiA, _ := clientADB.GetWorkItem(ctx, wiID)
+	require.NotNil(t, wiA)
+	require.Len(t, wiA.Comments, 1)
+	assert.Equal(t, "Hello from B", wiA.Comments[0].Body)
+
+	// Verify via v2 query API.
+	result := getJSON(t, srv, "/api/v2/work/"+string(wiID))
+	assert.Equal(t, "E2E test", result["Title"])
+}
+
+func syncHTTP(t *testing.T, serverURL string, req *dsync.SyncRequest) *dsync.SyncResponse {
+	t.Helper()
+	body, err := json.Marshal(req)
+	require.NoError(t, err)
+
+	resp, err := http.Post(serverURL+"/api/v1/sync", "application/json", strings.NewReader(string(body)))
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var syncResp dsync.SyncResponse
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&syncResp))
+	return &syncResp
 }

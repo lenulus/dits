@@ -12,18 +12,31 @@ import (
 	"github.com/lenulus/pf/internal/store"
 )
 
+// SignatureMode controls how the engine handles event signatures during sync.
+const (
+	SignatureModeWarn   = "warn"   // log warnings, accept events (default)
+	SignatureModeReject = "reject" // reject events with invalid or missing signatures
+	SignatureModeIgnore = "ignore" // skip signature verification entirely
+)
+
 // Engine handles sync logic for both server and client sides.
 type Engine struct {
-	db     store.DB
-	logger *slog.Logger
+	db            store.DB
+	logger        *slog.Logger
+	signatureMode string
 }
 
 func NewEngine(db store.DB) *Engine {
-	return &Engine{db: db, logger: slog.Default()}
+	return &Engine{db: db, logger: slog.Default(), signatureMode: SignatureModeWarn}
 }
 
 func NewEngineWithLogger(db store.DB, logger *slog.Logger) *Engine {
-	return &Engine{db: db, logger: logger}
+	return &Engine{db: db, logger: logger, signatureMode: SignatureModeWarn}
+}
+
+// SetSignatureMode configures signature enforcement: "warn" (default), "reject", or "ignore".
+func (e *Engine) SetSignatureMode(mode string) {
+	e.signatureMode = mode
 }
 
 // HandleSync processes a sync request (server-side).
@@ -35,9 +48,16 @@ func (e *Engine) HandleSync(ctx context.Context, req SyncRequest) (*SyncResponse
 		}
 	}
 
-	// 0b. Verify signatures on pushed events (warn mode).
+	// 0b. Verify signatures on pushed events.
+	if len(req.Events) > 0 && e.signatureMode != SignatureModeIgnore {
+		if err := e.verifyEventSignatures(ctx, req.Events); err != nil {
+			return nil, err
+		}
+	}
+
+	// 0c. Advisory protocol validation on pushed events (log, don't reject).
 	if len(req.Events) > 0 {
-		e.verifyEventSignatures(ctx, req.Events)
+		e.advisoryProtocolValidation(ctx, req.Events)
 	}
 
 	// 1. Ingest client events.
@@ -309,10 +329,17 @@ func (e *Engine) rematerialize(ctx context.Context, workItemID domain.WorkItemID
 	return e.db.UpsertWorkItem(ctx, wi)
 }
 
-// verifyEventSignatures checks signatures in warn mode.
-func (e *Engine) verifyEventSignatures(ctx context.Context, events []domain.Event) {
+// verifyEventSignatures checks signatures based on engine's signature mode.
+// In reject mode, returns an error on invalid/missing signatures.
+// In warn mode, logs warnings but returns nil.
+func (e *Engine) verifyEventSignatures(ctx context.Context, events []domain.Event) error {
+	reject := e.signatureMode == SignatureModeReject
+
 	for _, evt := range events {
 		if len(evt.Signature) == 0 {
+			if reject {
+				return fmt.Errorf("event %s has no signature (reject mode)", evt.ID)
+			}
 			e.logger.Debug("event has no signature", "event_id", evt.ID, "actor_id", evt.ActorID)
 			continue
 		}
@@ -331,13 +358,46 @@ func (e *Engine) verifyEventSignatures(ctx context.Context, events []domain.Even
 
 		valid, err := crypto.VerifyEvent(&evt, ed25519.PublicKey(pubKeyBytes))
 		if err != nil {
+			if reject {
+				return fmt.Errorf("signature verification failed for event %s: %w", evt.ID, err)
+			}
 			e.logger.Warn("signature verification error", "event_id", evt.ID, "error", err)
 			continue
 		}
 		if !valid {
+			if reject {
+				return fmt.Errorf("invalid signature on event %s from actor %s (reject mode)", evt.ID, evt.ActorID)
+			}
 			e.logger.Warn("INVALID SIGNATURE", "event_id", evt.ID, "actor_id", evt.ActorID)
 		} else {
 			e.logger.Debug("signature verified", "event_id", evt.ID)
+		}
+	}
+	return nil
+}
+
+// advisoryProtocolValidation checks pushed events against current work item state.
+// Violations are logged at WARN level but events are not rejected — the reducer
+// handles concurrent offline divergence via operational lineage.
+func (e *Engine) advisoryProtocolValidation(ctx context.Context, events []domain.Event) {
+	// Cache loaded work items to avoid repeated DB lookups.
+	wiCache := make(map[domain.WorkItemID]*domain.WorkItem)
+
+	for _, evt := range events {
+		wi, ok := wiCache[evt.WorkItemID]
+		if !ok {
+			wi, _ = e.db.GetWorkItem(ctx, evt.WorkItemID)
+			wiCache[evt.WorkItemID] = wi // may be nil for new work items
+		}
+
+		if err := domain.ValidateProtocol(evt, wi); err != nil {
+			e.logger.Warn("protocol violation (advisory)",
+				"event_id", evt.ID,
+				"event_type", evt.Type,
+				"work_item_id", evt.WorkItemID,
+				"actor_id", evt.ActorID,
+				"violation", err.Error(),
+			)
 		}
 	}
 }

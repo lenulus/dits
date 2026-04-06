@@ -579,7 +579,8 @@ func (s *Store) ListWorkItems(ctx context.Context, filter store.WorkItemFilter) 
 		args = append(args, string(filter.ClaimedBy))
 	}
 	if filter.Ready != nil && *filter.Ready {
-		conditions = append(conditions, "w.lease_holder IS NULL")
+		conditions = append(conditions, "(w.lease_holder IS NULL OR w.lease_expires_at < ?)")
+		args = append(args, time.Now().UTC().Format(time.RFC3339Nano))
 	}
 	if filter.Blocked != nil {
 		conditions = append(conditions, "w.blocked = ?")
@@ -808,6 +809,7 @@ func (s *Store) scanWorkItem(ctx context.Context, row *sql.Row) (*domain.WorkIte
 	if err := s.loadWorkItemCollections(ctx, wi); err != nil {
 		return nil, err
 	}
+	clearExpiredLease(wi)
 	return wi, nil
 }
 
@@ -854,7 +856,17 @@ func (s *Store) scanWorkItemRows(ctx context.Context, rows *sql.Rows) (*domain.W
 	if err := s.loadWorkItemCollections(ctx, wi); err != nil {
 		return nil, err
 	}
+	clearExpiredLease(wi)
 	return wi, nil
+}
+
+// clearExpiredLease clears lease fields if the lease has expired (wall-clock).
+// This is a query-time concern — the materialized state in the DB is not modified.
+func clearExpiredLease(wi *domain.WorkItem) {
+	if wi.LeaseExpiresAt != nil && wi.LeaseExpiresAt.Before(time.Now().UTC()) {
+		wi.LeaseHolder = nil
+		wi.LeaseExpiresAt = nil
+	}
 }
 
 func (s *Store) loadWorkItemCollections(ctx context.Context, wi *domain.WorkItem) error {

@@ -193,7 +193,7 @@ func TestUpsertWorkItem_GetWorkItem(t *testing.T) {
 	t0 := time.Date(2026, 4, 1, 10, 0, 0, 0, time.UTC)
 
 	leaseHolder := domain.ActorID("actor_agent")
-	leaseExpires := t0.Add(5 * time.Minute)
+	leaseExpires := time.Now().UTC().Add(1 * time.Hour) // future expiry to avoid clearExpiredLease
 	currentAttempt := domain.AttemptID("atp_001")
 	closedAt := t0.Add(10 * time.Minute)
 

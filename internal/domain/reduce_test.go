@@ -547,27 +547,6 @@ func TestReduce_RelationAddRemove(t *testing.T) {
 	assert.Empty(t, wi.Relations)
 }
 
-func TestReduce_SharedIDAssigned(t *testing.T) {
-	t0 := time.Date(2026, 3, 29, 10, 0, 0, 0, time.UTC)
-	events := []Event{
-		{
-			ID: "evt_001", WorkItemID: "wrk_001", Type: EventWorkCreated,
-			ActorID: "actor_alice", Timestamp: t0,
-			Payload: MustMarshalPayload(WorkCreatedPayload{Title: "Test", Kind: "task"}),
-		},
-		{
-			ID: "evt_002", WorkItemID: "wrk_001", Type: EventWorkSharedIDAssigned,
-			ParentEventIDs: []EventID{"evt_001"},
-			ActorID: "actor_system", Timestamp: t0.Add(1 * time.Minute),
-			Payload: MustMarshalPayload(SharedIDAssignedPayload{SharedID: "PROJ-42"}),
-		},
-	}
-
-	wi, err := Reduce(events)
-	require.NoError(t, err)
-	assert.Equal(t, SharedID("PROJ-42"), wi.SharedID)
-}
-
 func TestReduce_Empty(t *testing.T) {
 	_, err := Reduce(nil)
 	assert.Error(t, err)

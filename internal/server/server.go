@@ -62,6 +62,11 @@ func New(db store.DB, blobs blob.Store, logger *slog.Logger) *Server {
 	return s
 }
 
+// SetSignatureMode configures signature enforcement on the sync engine.
+func (s *Server) SetSignatureMode(mode string) {
+	s.engine.SetSignatureMode(mode)
+}
+
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.router.ServeHTTP(w, r)
 }

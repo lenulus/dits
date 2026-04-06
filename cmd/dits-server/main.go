@@ -22,6 +22,7 @@ func main() {
 	dbPath := flag.String("db", "dits-server.db", "database path")
 	blobDir := flag.String("blobs", "./blobs", "blob storage directory")
 	projectKey := flag.String("project", "", "project key (required)")
+	signatureMode := flag.String("signature-mode", "warn", "signature enforcement: warn, reject, or ignore")
 	flag.Parse()
 
 	if *projectKey == "" {
@@ -60,6 +61,7 @@ func main() {
 	}
 
 	srv := server.New(db, blobs, logger)
+	srv.SetSignatureMode(*signatureMode)
 	httpSrv := &http.Server{
 		Addr:    *addr,
 		Handler: srv,

@@ -162,14 +162,6 @@ func ApplyEvent(wi *WorkItem, e Event) error {
 		wi.ClosedAt = nil
 		wi.UpdatedAt = maxTime(wi.UpdatedAt, e.Timestamp)
 
-	case EventWorkSharedIDAssigned:
-		var p SharedIDAssignedPayload
-		if err := json.Unmarshal(e.Payload, &p); err != nil {
-			return err
-		}
-		wi.SharedID = p.SharedID
-		wi.UpdatedAt = maxTime(wi.UpdatedAt, e.Timestamp)
-
 	// --- Execution / Ownership ---
 
 	case EventWorkLeased:

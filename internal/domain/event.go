@@ -20,9 +20,8 @@ const (
 	EventWorkAssigned        EventType = "work.assigned"
 	EventWorkUnassigned      EventType = "work.unassigned"
 	EventWorkCommented       EventType = "work.commented"
-	EventWorkClosed          EventType = "work.closed"
-	EventWorkReopened        EventType = "work.reopened"
-	EventWorkSharedIDAssigned EventType = "work.shared_id_assigned"
+	EventWorkClosed   EventType = "work.closed"
+	EventWorkReopened EventType = "work.reopened"
 )
 
 // --- Execution / Ownership Events ---
@@ -153,10 +152,6 @@ type CommentPayload struct {
 
 type ClosedPayload struct {
 	Reason string `json:"reason,omitempty"`
-}
-
-type SharedIDAssignedPayload struct {
-	SharedID SharedID `json:"shared_id"`
 }
 
 // --- Execution / Ownership Payloads ---

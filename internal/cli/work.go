@@ -9,8 +9,12 @@ import (
 	"strings"
 	"time"
 
+	"encoding/json"
+
 	"github.com/lenulus/pf/internal/blob"
+	"github.com/lenulus/pf/internal/crypto"
 	"github.com/lenulus/pf/internal/domain"
+	"github.com/lenulus/pf/internal/project"
 	"github.com/lenulus/pf/internal/store"
 	"github.com/spf13/cobra"
 )
@@ -812,4 +816,106 @@ func init() {
 
 	workCommentCmd.Flags().StringP("body", "b", "", "Comment body (required)")
 	workCommentCmd.MarkFlagRequired("body")
+}
+
+// --- Helpers ---
+
+func jsonOutput(cmd *cobra.Command) bool {
+	v, _ := cmd.Flags().GetBool("json")
+	return v
+}
+
+func printJSON(v any) error {
+	data, err := json.MarshalIndent(v, "", "  ")
+	if err != nil {
+		return err
+	}
+	fmt.Println(string(data))
+	return nil
+}
+
+func loadMeta(ctx context.Context, proj *project.Project) (*domain.MetaConfig, error) {
+	meta, err := proj.DB.GetCurrentMeta(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if meta == nil {
+		return nil, fmt.Errorf("no meta configuration found")
+	}
+	return meta, nil
+}
+
+func loadProject() (*project.Project, error) {
+	root, err := project.FindRoot()
+	if err != nil {
+		return nil, err
+	}
+	return project.Load(root)
+}
+
+func resolveWorkItem(ctx context.Context, proj *project.Project, ref string) (*domain.WorkItem, error) {
+	wi, err := proj.DB.GetWorkItemBySharedID(ctx, domain.SharedID(ref))
+	if err != nil {
+		return nil, err
+	}
+	if wi != nil {
+		return wi, nil
+	}
+
+	wi, err = proj.DB.GetWorkItem(ctx, domain.WorkItemID(ref))
+	if err != nil {
+		return nil, err
+	}
+	if wi != nil {
+		return wi, nil
+	}
+
+	return nil, fmt.Errorf("work item not found: %s", ref)
+}
+
+func signEvent(proj *project.Project, e *domain.Event) error {
+	if k := proj.PrivKey(); k != nil {
+		return crypto.SignEvent(e, k)
+	}
+	return nil
+}
+
+func appendAndMaterialize(ctx context.Context, proj *project.Project, workItemID domain.WorkItemID, event domain.Event) error {
+	// Protocol validation: check coordination invariants against current state.
+	existing, _ := proj.DB.GetWorkItem(ctx, workItemID)
+	if err := domain.ValidateProtocol(event, existing); err != nil {
+		return err
+	}
+
+	if err := signEvent(proj, &event); err != nil {
+		return fmt.Errorf("signing event: %w", err)
+	}
+
+	if err := proj.DB.AppendEvents(ctx, []domain.Event{event}); err != nil {
+		return fmt.Errorf("appending event: %w", err)
+	}
+
+	events, err := proj.DB.GetEventsForWorkItem(ctx, workItemID)
+	if err != nil {
+		return err
+	}
+	ordered := domain.CausalOrder(events)
+	wi, err := domain.Reduce(ordered)
+	if err != nil {
+		return err
+	}
+
+	existing, _ = proj.DB.GetWorkItem(ctx, workItemID)
+	if existing != nil && existing.SharedID != "" {
+		wi.SharedID = existing.SharedID
+	}
+
+	return proj.DB.UpsertWorkItem(ctx, wi)
+}
+
+func workItemDisplayID(wi *domain.WorkItem) string {
+	if wi.SharedID != "" {
+		return string(wi.SharedID)
+	}
+	return string(wi.ID)
 }

@@ -345,7 +345,6 @@ type Event struct {
 | `work.commented` | `{body, produced_by?}` | |
 | `work.closed` | `{reason?}` | |
 | `work.reopened` | `{}` | |
-| `work.shared_id_assigned` | `{shared_id}` | Server-assigned |
 
 ### 6.2 Execution / Ownership Events
 

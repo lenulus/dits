@@ -261,12 +261,6 @@ Marks an output as discarded/superseded. If the discarded ref is the currently r
 
 ---
 
-## dits issue
-
-Alias for `dits work` commands. `dits issue create` defaults to `--kind issue`. All subcommands from v1 are preserved: create, list, show, comment, close, reopen, status, label-add, label-remove, assign, unassign, link, unlink, attach, attachments, detach, annotate, annotations, annotate-delete, private-label-add, private-label-remove.
-
----
-
 ## dits sync
 
 ```

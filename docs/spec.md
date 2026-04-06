@@ -38,7 +38,7 @@ Properties: immutable, never reused, primary reference key.
 
 Server-assigned, human-friendly. Format: `<PROJECT_KEY>-<N>` (e.g., `PROJ-42`).
 
-Properties: monotonic, stable, may contain gaps, never reused.
+Properties: monotonic, stable, may contain gaps, never reused. Shared IDs are server-assigned metadata propagated via the `SharedIDs` map in sync responses — they are not events in the work item DAG.
 
 ### 2.3 Event ID
 
@@ -121,7 +121,6 @@ All state changes are recorded as immutable events.
 | `work.commented` | `{body, produced_by?}` | Adds a comment |
 | `work.closed` | `{reason?}` | Closes the work item |
 | `work.reopened` | `{}` | Reopens the work item |
-| `work.shared_id_assigned` | `{shared_id}` | Server assigns shared ID |
 
 #### Execution / Ownership Events
 

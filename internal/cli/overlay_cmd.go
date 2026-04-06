@@ -151,9 +151,9 @@ var issuePrivateLabelRemoveCmd = &cobra.Command{
 }
 
 func init() {
-	issueCmd.AddCommand(issueAnnotateCmd)
-	issueCmd.AddCommand(issueAnnotationsCmd)
-	issueCmd.AddCommand(issueAnnotateDeleteCmd)
-	issueCmd.AddCommand(issuePrivateLabelAddCmd)
-	issueCmd.AddCommand(issuePrivateLabelRemoveCmd)
+	workCmd.AddCommand(issueAnnotateCmd)
+	workCmd.AddCommand(issueAnnotationsCmd)
+	workCmd.AddCommand(issueAnnotateDeleteCmd)
+	workCmd.AddCommand(issuePrivateLabelAddCmd)
+	workCmd.AddCommand(issuePrivateLabelRemoveCmd)
 }
