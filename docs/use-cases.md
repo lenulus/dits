@@ -167,21 +167,21 @@ DITS supports familiar issue tracking as a projection over the coordination subs
 
 ```bash
 # Create issues (shorthand for work items with kind=issue)
-dits issue create --title "Login fails on Safari" --body "500 error on POST /auth"
-dits issue create --title "Add dark mode support" --label feature
+dits work create --kind issue --title "Login fails on Safari" --body "500 error on POST /auth"
+dits work create --kind issue --title "Add dark mode support" --label feature
 
 # Triage
-dits issue list
-dits issue show PROJ-1
-dits issue status PROJ-1 in_progress
-dits issue assign PROJ-1 actor_alice
+dits work list --kind issue
+dits work show PROJ-1
+dits work status PROJ-1 in_progress
+dits work assign PROJ-1 actor_alice
 
 # Comment and close
-dits issue comment PROJ-1 --body "Fixed in commit abc123"
-dits issue close PROJ-1
+dits work comment PROJ-1 --body "Fixed in commit abc123"
+dits work close PROJ-1
 
 # Reopen if needed
-dits issue reopen PROJ-1
+dits work reopen PROJ-1
 ```
 
 ### Investigation Workflow

@@ -808,7 +808,7 @@ CLI commands for the new domain, plus full integration testing.
 - `dits work create`, `dits work list`, `dits work show`, `dits work lease`, `dits work lease-release`, `dits work checkpoint`, `dits work complete`, `dits work fail`, `dits work review`, `dits work handoff`
 - `dits work observe`, `dits work evidence`, `dits work finding`, `dits work plan`
 - Note: `complete` and `fail` operate on the current execution attempt, not the work item lifecycle. They emit `work.execution_completed` / `work.execution_failed` against the active attempt.
-- `dits issue` as alias for `dits work --kind=issue`
+- `dits work create --kind=issue` for issue-tracking use cases
 - E2E test: two agents coordinating via leases and checkpoints through server
 - Documentation updates
 
@@ -880,4 +880,4 @@ Implementation decisions to resolve during build-out, not design blockers:
 7. Findings and observations are preserved with confidence scores and source references
 8. Handoff between two actors completes with accept/reject semantics
 9. All materialized state is deterministic: same events produce same WorkItem regardless of which node reduces them
-10. `dits issue create` works as a convenience that creates a `work.created` event with `kind=issue`
+10. `dits work create --kind=issue` creates a `work.created` event with `kind=issue`

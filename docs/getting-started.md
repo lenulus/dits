@@ -167,7 +167,7 @@ dits work private-label-add DEMO-1 my-focus
 dits work private-label-remove DEMO-1 my-focus
 ```
 
-Note: These commands are available under both `dits work` and `dits issue`.
+Note: All commands are under `dits work`.
 
 ## Sync with a Server
 
