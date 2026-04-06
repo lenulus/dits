@@ -92,11 +92,12 @@ type WorkItem struct {
     Assignees       []ActorID
 
     // Coordination state
-    LeaseHolder       *ActorID
-    LeaseExpiresAt  *time.Time
-    CurrentAttempt  *AttemptID
-    Blocked         bool
-    BlockedReason   string
+    LeaseHolder        *ActorID
+    LeaseExpiresAt     *time.Time
+    CurrentAttempt     *AttemptID
+    Blocked            bool
+    BlockedReason      string
+    RetainedOutcomeRef *string      // subject ref of the currently retained output
 
     // Timestamps
     CreatedBy       ActorID
@@ -112,6 +113,8 @@ type WorkItem struct {
     Observations    []Observation
     Findings        []Finding
     Attempts        []ExecutionAttempt
+    Evals           []Eval
+    Outcomes        []Outcome
 
     EventCount      int
     HeadEvents      []EventID

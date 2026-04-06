@@ -128,6 +128,35 @@ Query artifacts by type and role:
 curl http://localhost:8484/api/v2/work/PROJ-43/artifacts?type=trace&role=evidence
 ```
 
+### Artifact Selection via Eval + Outcome
+
+An agent generates multiple candidate artifacts, evaluates each, and retains the best one:
+
+```bash
+# Agent generates two candidate reports
+dits work attach PROJ-50 report-v1.md
+dits work attach PROJ-50 report-v2.md
+
+# Eval each artifact
+dits work eval-request PROJ-50 --scope "report quality" --subject-kind artifact --subject sha256:aaa
+dits work eval-complete PROJ-50 --eval-id evl_10... --verdict partial \
+  --subject-kind artifact --subject sha256:aaa \
+  --summary "Missing conclusions section" --metrics '{"completeness": 0.6}'
+
+dits work eval-request PROJ-50 --scope "report quality" --subject-kind artifact --subject sha256:bbb
+dits work eval-complete PROJ-50 --eval-id evl_11... --verdict pass \
+  --subject-kind artifact --subject sha256:bbb \
+  --summary "Complete and well-structured" --metrics '{"completeness": 0.95}'
+
+# Retain the better artifact, discard the other
+dits work discard PROJ-50 --subject sha256:aaa --subject-kind artifact --reason "Incomplete"
+dits work retain PROJ-50 --subject sha256:bbb --subject-kind artifact \
+  --reason "Passed eval" --eval-ref evl_11...
+
+# Check outcomes
+curl http://localhost:8484/api/v2/work/PROJ-50/outcomes?decision=retained
+```
+
 ---
 
 ## 2. Human Workflows

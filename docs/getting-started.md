@@ -109,6 +109,23 @@ dits work complete DEMO-1 --summary "All tests green"
 dits work lease-release DEMO-1
 ```
 
+## Eval and Outcome Selection
+
+After execution, evaluate the result and record which output to keep:
+
+```bash
+# Evaluate the completed attempt
+dits work eval-request DEMO-1 --scope "test coverage" --subject-kind attempt --subject atp_01...
+dits work eval-complete DEMO-1 --eval-id evl_01... --verdict pass \
+  --summary "All tests green, 92% coverage" --metrics '{"coverage": 0.92}'
+
+# Retain the successful output
+dits work retain DEMO-1 --subject atp_01... --subject-kind attempt \
+  --reason "Passed eval" --eval-ref evl_01...
+```
+
+This is the core optimization loop: execute → eval → retain or discard → retry if needed.
+
 ## Evidence and Findings
 
 For investigation work items, record observations and findings:
