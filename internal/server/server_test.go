@@ -267,7 +267,7 @@ func TestV2_WorkItemAttempts(t *testing.T) {
 	appendEvent(t, db, "wrk_001", domain.Event{
 		ID: domain.NewEventID(), WorkItemID: "wrk_001", Type: domain.EventWorkExecutionStarted,
 		ParentEventIDs: heads, ActorID: "actor_agent", Timestamp: t0.Add(time.Minute),
-		Payload: domain.MustMarshalPayload(domain.ExecutionStartedPayload{AttemptID: "atp_001", AttemptNumber: 1}),
+		Payload: domain.MustMarshalPayload(domain.ExecutionStartedPayload{AttemptID: "atp_001"}),
 	})
 
 	result := getJSON(t, srv, "/api/v2/work/wrk_001/attempts")
@@ -285,7 +285,7 @@ func TestV2_WorkItemCheckpoints(t *testing.T) {
 	appendEvent(t, db, "wrk_001", domain.Event{
 		ID: domain.NewEventID(), WorkItemID: "wrk_001", Type: domain.EventWorkExecutionStarted,
 		ParentEventIDs: heads, ActorID: "actor_agent", Timestamp: t0.Add(time.Minute),
-		Payload: domain.MustMarshalPayload(domain.ExecutionStartedPayload{AttemptID: "atp_001", AttemptNumber: 1}),
+		Payload: domain.MustMarshalPayload(domain.ExecutionStartedPayload{AttemptID: "atp_001"}),
 	})
 
 	heads, _ = db.GetHeads(ctx, "wrk_001")

@@ -7,6 +7,24 @@ import (
 
 type EventType string
 
+// Event Classification:
+//
+// Authoritative control — operational state transitions requiring protocol validation:
+//   lease, lease_released, lease_renewed, execution_started/completed/failed/abandoned,
+//   blocked, unblocked
+//
+// Decision/gating — selection events that reference prior proposals or requests:
+//   review_requested/completed, eval_requested/completed, plan_accepted/rejected,
+//   handoff_accepted/rejected, outcome_retained/discarded
+//
+// Observational — evidence and progress records:
+//   observation_recorded, finding_recorded/retracted, checkpointed, progress_reported,
+//   evidence_attached
+//
+// Lifecycle/projection — human-facing state:
+//   created, title_set, body_set, status_set, priority_set, label_added/removed,
+//   assigned/unassigned, commented, closed, reopened
+
 // --- Lifecycle Events ---
 
 const (
@@ -175,9 +193,8 @@ type LeaseRenewedPayload struct {
 }
 
 type ExecutionStartedPayload struct {
-	AttemptID     AttemptID `json:"attempt_id"`
-	AttemptNumber uint32    `json:"attempt_number"`
-	PlanRef       string    `json:"plan_ref,omitempty"`
+	AttemptID AttemptID `json:"attempt_id"`
+	PlanRef   string    `json:"plan_ref,omitempty"`
 }
 
 type ExecutionCompletedPayload struct {

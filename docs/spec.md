@@ -129,7 +129,7 @@ All state changes are recorded as immutable events.
 | `work.leased` | `{lease_id, lease_duration_secs, lease_expires_at, generation}` |
 | `work.lease_released` | `{lease_id, reason}` |
 | `work.lease_renewed` | `{lease_id, lease_expires_at, generation}` |
-| `work.execution_started` | `{attempt_id, attempt_number, plan_ref?}` |
+| `work.execution_started` | `{attempt_id, plan_ref?}` |
 | `work.execution_completed` | `{attempt_id, summary, output_artifact_refs?}` |
 | `work.execution_failed` | `{attempt_id, error, retryable, output_artifact_refs?}` |
 | `work.execution_abandoned` | `{attempt_id, reason}` |
@@ -553,3 +553,28 @@ Seven incremental migrations:
 12. **Coordination is event-sourced** — leases, attempts, and findings are derived from events, not stored separately
 13. **Operational conflict resolution** — concurrent lease lineages resolved deterministically; losing lineage preserved as non-authoritative history
 14. **Eval is machine judgment, review is human judgment** — evals for autonomous loops, reviews for governance gates
+
+---
+
+## 14. Implementation Status
+
+### Implemented
+
+- Three-tier validation: schema (ValidateEvent), protocol (ValidateProtocol), reducer (deterministic materialization)
+- Lease-gated execution: active lease required to start/checkpoint/complete/fail attempts
+- Actor authority: only lease holder may perform coordination operations
+- Lease generation monotonicity: renewal requires strictly increasing generation
+- Operational lineage resolution: concurrent lease branches resolved deterministically; losing lineage preserved as non-authoritative
+- Derived attempt numbering: canonical numbers computed during materialization, not from client payloads
+- Incremental advisory batch validation during sync: events validated against incrementally simulated state
+- Configurable signature enforcement: warn, reject, or ignore modes
+- Lease expiry at query time: expired leases treated as released for readiness queries
+- Centralized readiness contract: `IsReady(wi, openStatuses)` derives actionability from coordination state
+- Reference integrity: finding retraction and outcome retention/discard validated against materialized state
+
+### Future / Reserved
+
+- Event-level reference integrity for plans, reviews, handoffs, and evals (requires event DAG lookups, not just materialized state)
+- Full lease lineage identity tracking (lease branches as durable objects with ancestry)
+- Policy-based readiness (kind-specific, actor-specific, dependency-aware)
+- Server-side event admission policy (beyond signature verification)

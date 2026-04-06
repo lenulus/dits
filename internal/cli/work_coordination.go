@@ -119,7 +119,6 @@ var workStartCmd = &cobra.Command{
 			return err
 		}
 
-		attemptNumber := uint32(len(wi.Attempts) + 1)
 		attemptID := domain.NewAttemptID()
 
 		heads, _ := proj.DB.GetHeads(ctx, wi.ID)
@@ -127,14 +126,14 @@ var workStartCmd = &cobra.Command{
 			ID: domain.NewEventID(), WorkItemID: wi.ID, Type: domain.EventWorkExecutionStarted,
 			ParentEventIDs: heads, ActorID: proj.Config.ActorID, Timestamp: time.Now().UTC(),
 			Payload: domain.MustMarshalPayload(domain.ExecutionStartedPayload{
-				AttemptID: attemptID, AttemptNumber: attemptNumber,
+				AttemptID: attemptID,
 			}),
 		}
 
 		if err := appendAndMaterialize(ctx, proj, wi.ID, event); err != nil {
 			return err
 		}
-		fmt.Printf("Started attempt #%d (%s) on %s\n", attemptNumber, attemptID, workItemDisplayID(wi))
+		fmt.Printf("Started attempt %s on %s\n", attemptID, workItemDisplayID(wi))
 		return nil
 	},
 }

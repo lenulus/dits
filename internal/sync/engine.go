@@ -376,28 +376,54 @@ func (e *Engine) verifyEventSignatures(ctx context.Context, events []domain.Even
 	return nil
 }
 
-// advisoryProtocolValidation checks pushed events against current work item state.
-// Violations are logged at WARN level but events are not rejected — the reducer
-// handles concurrent offline divergence via operational lineage.
+// advisoryProtocolValidation checks pushed events against incrementally simulated
+// work item state. Events are grouped by WorkItemID, sorted causally, and each
+// event is validated against simulated state that includes prior events from
+// the same batch. Violations are logged at WARN level but events are not rejected.
 func (e *Engine) advisoryProtocolValidation(ctx context.Context, events []domain.Event) {
-	// Cache loaded work items to avoid repeated DB lookups.
-	wiCache := make(map[domain.WorkItemID]*domain.WorkItem)
-
+	// Group events by work item.
+	byWI := make(map[domain.WorkItemID][]domain.Event)
 	for _, evt := range events {
-		wi, ok := wiCache[evt.WorkItemID]
-		if !ok {
-			wi, _ = e.db.GetWorkItem(ctx, evt.WorkItemID)
-			wiCache[evt.WorkItemID] = wi // may be nil for new work items
+		byWI[evt.WorkItemID] = append(byWI[evt.WorkItemID], evt)
+	}
+
+	for wiID, wiEvents := range byWI {
+		// Load pre-batch state (may be nil for new work items).
+		wi, _ := e.db.GetWorkItem(ctx, wiID)
+
+		// Sort events in causal order for accurate sequential validation.
+		ordered := domain.CausalOrder(wiEvents)
+
+		// Create a mutable copy for incremental simulation.
+		var simWI domain.WorkItem
+		if wi != nil {
+			simWI = *wi
+		} else {
+			// Empty work item for new creations.
+			simWI = domain.WorkItem{
+				Labels: []string{}, Assignees: []domain.ActorID{},
+				Comments: []domain.Comment{}, Artifacts: []domain.Artifact{},
+				Relations: []domain.Relation{}, Checkpoints: []domain.Checkpoint{},
+				Observations: []domain.Observation{}, Findings: []domain.Finding{},
+				Attempts: []domain.ExecutionAttempt{}, Evals: []domain.Eval{},
+				Outcomes: []domain.Outcome{},
+			}
 		}
 
-		if err := domain.ValidateProtocol(evt, wi); err != nil {
-			e.logger.Warn("protocol violation (advisory)",
-				"event_id", evt.ID,
-				"event_type", evt.Type,
-				"work_item_id", evt.WorkItemID,
-				"actor_id", evt.ActorID,
-				"violation", err.Error(),
-			)
+		for _, evt := range ordered {
+			// Validate against current simulated state.
+			if err := domain.ValidateProtocol(evt, &simWI); err != nil {
+				e.logger.Warn("protocol violation (advisory)",
+					"event_id", evt.ID,
+					"event_type", evt.Type,
+					"work_item_id", evt.WorkItemID,
+					"actor_id", evt.ActorID,
+					"violation", err.Error(),
+				)
+			}
+
+			// Apply event to simulated state for next iteration.
+			domain.ApplyEvent(&simWI, evt)
 		}
 	}
 }

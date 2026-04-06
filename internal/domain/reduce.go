@@ -8,6 +8,17 @@ import (
 
 // Reduce takes causally-ordered events and produces a materialized WorkItem.
 // Events MUST be in causal order (use CausalOrder first).
+//
+// The reducer is deterministic: it applies all events without validation or
+// rejection. Protocol validation (ValidateProtocol) catches invalid events
+// before they enter the event log at creation time. The reducer handles
+// concurrent offline divergence via the post-reduction resolveOperationalLineage
+// pass, which determines authoritative lease lineage and derived attempt numbering.
+//
+// Three-tier validation model:
+//   1. ValidateEvent — schema/meta references (stateless)
+//   2. ValidateProtocol — coordination invariants (stateful, authoritative at creation)
+//   3. Reduce/ApplyEvent — deterministic materialization (no rejection)
 func Reduce(events []Event) (*WorkItem, error) {
 	if len(events) == 0 {
 		return nil, fmt.Errorf("no events to reduce")
@@ -172,6 +183,8 @@ func ApplyEvent(wi *WorkItem, e Event) error {
 		holder := e.ActorID
 		wi.LeaseHolder = &holder
 		wi.LeaseExpiresAt = &p.LeaseExpiresAt
+		wi.LeaseID = &p.LeaseID
+		wi.LeaseGeneration = p.Generation
 		wi.UpdatedAt = maxTime(wi.UpdatedAt, e.Timestamp)
 
 	case EventWorkLeaseReleased:
@@ -181,6 +194,8 @@ func ApplyEvent(wi *WorkItem, e Event) error {
 		}
 		wi.LeaseHolder = nil
 		wi.LeaseExpiresAt = nil
+		wi.LeaseID = nil
+		wi.LeaseGeneration = 0
 		wi.UpdatedAt = maxTime(wi.UpdatedAt, e.Timestamp)
 
 	case EventWorkLeaseRenewed:
@@ -189,6 +204,7 @@ func ApplyEvent(wi *WorkItem, e Event) error {
 			return err
 		}
 		wi.LeaseExpiresAt = &p.LeaseExpiresAt
+		wi.LeaseGeneration = p.Generation
 		wi.UpdatedAt = maxTime(wi.UpdatedAt, e.Timestamp)
 
 	case EventWorkExecutionStarted:

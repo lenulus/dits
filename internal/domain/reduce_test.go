@@ -240,7 +240,7 @@ func TestReduce_ExecutionAttempt(t *testing.T) {
 			ID: "evt_002", WorkItemID: "wrk_001", Type: EventWorkExecutionStarted,
 			ParentEventIDs: []EventID{"evt_001"},
 			ActorID: "actor_agent1", Timestamp: t0.Add(1 * time.Minute),
-			Payload: MustMarshalPayload(ExecutionStartedPayload{AttemptID: "atp_001", AttemptNumber: 1}),
+			Payload: MustMarshalPayload(ExecutionStartedPayload{AttemptID: "atp_001"}),
 		},
 		{
 			ID: "evt_003", WorkItemID: "wrk_001", Type: EventWorkCheckpointed,
@@ -298,7 +298,7 @@ func TestReduce_FailedAttemptRetry(t *testing.T) {
 			ID: "evt_002", WorkItemID: "wrk_001", Type: EventWorkExecutionStarted,
 			ParentEventIDs: []EventID{"evt_001"},
 			ActorID: "actor_agent1", Timestamp: t0.Add(1 * time.Minute),
-			Payload: MustMarshalPayload(ExecutionStartedPayload{AttemptID: "atp_001", AttemptNumber: 1}),
+			Payload: MustMarshalPayload(ExecutionStartedPayload{AttemptID: "atp_001"}),
 		},
 		{
 			ID: "evt_003", WorkItemID: "wrk_001", Type: EventWorkExecutionFailed,
@@ -310,7 +310,7 @@ func TestReduce_FailedAttemptRetry(t *testing.T) {
 			ID: "evt_004", WorkItemID: "wrk_001", Type: EventWorkExecutionStarted,
 			ParentEventIDs: []EventID{"evt_003"},
 			ActorID: "actor_agent1", Timestamp: t0.Add(3 * time.Minute),
-			Payload: MustMarshalPayload(ExecutionStartedPayload{AttemptID: "atp_002", AttemptNumber: 2}),
+			Payload: MustMarshalPayload(ExecutionStartedPayload{AttemptID: "atp_002"}),
 		},
 		{
 			ID: "evt_005", WorkItemID: "wrk_001", Type: EventWorkExecutionCompleted,
@@ -640,13 +640,13 @@ func TestReduce_ConcurrentAttempts(t *testing.T) {
 			ID: "evt_002", WorkItemID: "wrk_001", Type: EventWorkExecutionStarted,
 			ParentEventIDs: []EventID{"evt_001"},
 			ActorID: "actor_agent1", Timestamp: t0.Add(1 * time.Minute),
-			Payload: MustMarshalPayload(ExecutionStartedPayload{AttemptID: "atp_001", AttemptNumber: 1}),
+			Payload: MustMarshalPayload(ExecutionStartedPayload{AttemptID: "atp_001"}),
 		},
 		{
 			ID: "evt_003", WorkItemID: "wrk_001", Type: EventWorkExecutionStarted,
 			ParentEventIDs: []EventID{"evt_001"},
 			ActorID: "actor_agent2", Timestamp: t0.Add(1 * time.Minute),
-			Payload: MustMarshalPayload(ExecutionStartedPayload{AttemptID: "atp_002", AttemptNumber: 1}),
+			Payload: MustMarshalPayload(ExecutionStartedPayload{AttemptID: "atp_002"}),
 		},
 	}
 
@@ -760,7 +760,7 @@ func TestReduce_SplitBrainLeaseLineage(t *testing.T) {
 		ID: "evt_A2", WorkItemID: "wrk_001", Type: EventWorkExecutionStarted,
 		ParentEventIDs: []EventID{"evt_A1"},
 		ActorID: "actor_agent1", Timestamp: t0.Add(2 * time.Minute),
-		Payload: MustMarshalPayload(ExecutionStartedPayload{AttemptID: "atp_A1", AttemptNumber: 1}),
+		Payload: MustMarshalPayload(ExecutionStartedPayload{AttemptID: "atp_A1"}),
 	}
 	cpA := Event{
 		ID: "evt_A3", WorkItemID: "wrk_001", Type: EventWorkCheckpointed,
@@ -783,7 +783,7 @@ func TestReduce_SplitBrainLeaseLineage(t *testing.T) {
 		ID: "evt_B2", WorkItemID: "wrk_001", Type: EventWorkExecutionStarted,
 		ParentEventIDs: []EventID{"evt_B1"},
 		ActorID: "actor_agent2", Timestamp: t0.Add(2*time.Minute + 30*time.Second),
-		Payload: MustMarshalPayload(ExecutionStartedPayload{AttemptID: "atp_B1", AttemptNumber: 1}),
+		Payload: MustMarshalPayload(ExecutionStartedPayload{AttemptID: "atp_B1"}),
 	}
 
 	// After sync, all events are in the DAG. Causal order processes them:
@@ -845,7 +845,7 @@ func TestReduce_NoLeaseAllAttemptsAuthoritative(t *testing.T) {
 			ID: "evt_003", WorkItemID: "wrk_001", Type: EventWorkExecutionStarted,
 			ParentEventIDs: []EventID{"evt_002"},
 			ActorID: "actor_agent1", Timestamp: t0.Add(2 * time.Minute),
-			Payload: MustMarshalPayload(ExecutionStartedPayload{AttemptID: "atp_001", AttemptNumber: 1}),
+			Payload: MustMarshalPayload(ExecutionStartedPayload{AttemptID: "atp_001"}),
 		},
 		{
 			ID: "evt_004", WorkItemID: "wrk_001", Type: EventWorkExecutionCompleted,
@@ -885,7 +885,7 @@ func TestReduce_LeaseReleasedAllAttemptsAuthoritative(t *testing.T) {
 			ID: "evt_003", WorkItemID: "wrk_001", Type: EventWorkExecutionStarted,
 			ParentEventIDs: []EventID{"evt_002"},
 			ActorID: "actor_agent1", Timestamp: t0.Add(2 * time.Minute),
-			Payload: MustMarshalPayload(ExecutionStartedPayload{AttemptID: "atp_001", AttemptNumber: 1}),
+			Payload: MustMarshalPayload(ExecutionStartedPayload{AttemptID: "atp_001"}),
 		},
 		{
 			ID: "evt_004", WorkItemID: "wrk_001", Type: EventWorkLeaseReleased,

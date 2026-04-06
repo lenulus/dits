@@ -65,6 +65,8 @@ func (s *Store) migrate() error {
 
 	// Idempotent column additions for schema evolution.
 	s.addColumnIfNotExists("work_items", "retained_outcome_ref", "TEXT")
+	s.addColumnIfNotExists("work_items", "lease_id", "TEXT")
+	s.addColumnIfNotExists("work_items", "lease_generation", "INTEGER DEFAULT 0")
 
 	return nil
 }
@@ -302,10 +304,10 @@ func (s *Store) UpsertWorkItem(ctx context.Context, wi *domain.WorkItem) error {
 
 	_, err = tx.ExecContext(ctx,
 		`INSERT INTO work_items (id, shared_id, kind, title, body, status, priority,
-		  lease_holder, lease_expires_at, current_attempt, blocked, blocked_reason,
-		  retained_outcome_ref,
+		  lease_holder, lease_expires_at, lease_id, lease_generation,
+		  current_attempt, blocked, blocked_reason, retained_outcome_ref,
 		  created_by, created_at, updated_at, closed_at, event_count)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(id) DO UPDATE SET
 		   shared_id = excluded.shared_id,
 		   kind = excluded.kind,
@@ -315,6 +317,8 @@ func (s *Store) UpsertWorkItem(ctx context.Context, wi *domain.WorkItem) error {
 		   priority = excluded.priority,
 		   lease_holder = excluded.lease_holder,
 		   lease_expires_at = excluded.lease_expires_at,
+		   lease_id = excluded.lease_id,
+		   lease_generation = excluded.lease_generation,
 		   current_attempt = excluded.current_attempt,
 		   blocked = excluded.blocked,
 		   blocked_reason = excluded.blocked_reason,
@@ -323,8 +327,8 @@ func (s *Store) UpsertWorkItem(ctx context.Context, wi *domain.WorkItem) error {
 		   closed_at = excluded.closed_at,
 		   event_count = excluded.event_count`,
 		wi.ID, sharedID, wi.Kind, wi.Title, wi.Body, wi.Status, wi.Priority,
-		leaseHolder, leaseExpiresAt, currentAttempt,
-		boolToInt(wi.Blocked), wi.BlockedReason, wi.RetainedOutcomeRef,
+		leaseHolder, leaseExpiresAt, wi.LeaseID, wi.LeaseGeneration,
+		currentAttempt, boolToInt(wi.Blocked), wi.BlockedReason, wi.RetainedOutcomeRef,
 		wi.CreatedBy, wi.CreatedAt.UTC().Format(time.RFC3339Nano),
 		wi.UpdatedAt.UTC().Format(time.RFC3339Nano), closedAt, wi.EventCount,
 	)
@@ -525,7 +529,8 @@ func (s *Store) UpsertWorkItem(ctx context.Context, wi *domain.WorkItem) error {
 func (s *Store) GetWorkItem(ctx context.Context, id domain.WorkItemID) (*domain.WorkItem, error) {
 	row := s.db.QueryRowContext(ctx,
 		`SELECT id, shared_id, kind, title, body, status, priority,
-		  lease_holder, lease_expires_at, current_attempt, blocked, blocked_reason,
+		  lease_holder, lease_expires_at, lease_id, lease_generation,
+		  current_attempt, blocked, blocked_reason,
 		  retained_outcome_ref, created_by, created_at, updated_at, closed_at, event_count
 		 FROM work_items WHERE id = ?`, id)
 	return s.scanWorkItem(ctx, row)
@@ -534,7 +539,8 @@ func (s *Store) GetWorkItem(ctx context.Context, id domain.WorkItemID) (*domain.
 func (s *Store) GetWorkItemBySharedID(ctx context.Context, id domain.SharedID) (*domain.WorkItem, error) {
 	row := s.db.QueryRowContext(ctx,
 		`SELECT id, shared_id, kind, title, body, status, priority,
-		  lease_holder, lease_expires_at, current_attempt, blocked, blocked_reason,
+		  lease_holder, lease_expires_at, lease_id, lease_generation,
+		  current_attempt, blocked, blocked_reason,
 		  retained_outcome_ref, created_by, created_at, updated_at, closed_at, event_count
 		 FROM work_items WHERE shared_id = ?`, id)
 	return s.scanWorkItem(ctx, row)
@@ -542,7 +548,8 @@ func (s *Store) GetWorkItemBySharedID(ctx context.Context, id domain.SharedID) (
 
 func (s *Store) ListWorkItems(ctx context.Context, filter store.WorkItemFilter) ([]domain.WorkItem, error) {
 	query := `SELECT w.id, w.shared_id, w.kind, w.title, w.body, w.status, w.priority,
-	  w.lease_holder, w.lease_expires_at, w.current_attempt, w.blocked, w.blocked_reason,
+	  w.lease_holder, w.lease_expires_at, w.lease_id, w.lease_generation,
+	  w.current_attempt, w.blocked, w.blocked_reason,
 	  w.retained_outcome_ref, w.created_by, w.created_at, w.updated_at, w.closed_at, w.event_count
 	  FROM work_items w`
 	var conditions []string
@@ -765,12 +772,13 @@ func scanEventRows(rows *sql.Rows) (*domain.Event, error) {
 
 func (s *Store) scanWorkItem(ctx context.Context, row *sql.Row) (*domain.WorkItem, error) {
 	wi := &domain.WorkItem{}
-	var sharedID, closedAt, leaseHolder, leaseExpiresAt, currentAttempt, retainedOutcomeRef sql.NullString
+	var sharedID, closedAt, leaseHolder, leaseExpiresAt, leaseIDStr, currentAttempt, retainedOutcomeRef sql.NullString
 	var createdAt, updatedAt string
 	var blocked int
 
 	err := row.Scan(&wi.ID, &sharedID, &wi.Kind, &wi.Title, &wi.Body, &wi.Status, &wi.Priority,
-		&leaseHolder, &leaseExpiresAt, &currentAttempt, &blocked, &wi.BlockedReason,
+		&leaseHolder, &leaseExpiresAt, &leaseIDStr, &wi.LeaseGeneration,
+		&currentAttempt, &blocked, &wi.BlockedReason,
 		&retainedOutcomeRef, &wi.CreatedBy, &createdAt, &updatedAt, &closedAt, &wi.EventCount)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -796,6 +804,10 @@ func (s *Store) scanWorkItem(ctx context.Context, row *sql.Row) (*domain.WorkIte
 		t, _ := time.Parse(time.RFC3339Nano, leaseExpiresAt.String)
 		wi.LeaseExpiresAt = &t
 	}
+	if leaseIDStr.Valid {
+		lid := domain.LeaseID(leaseIDStr.String)
+		wi.LeaseID = &lid
+	}
 	if currentAttempt.Valid {
 		a := domain.AttemptID(currentAttempt.String)
 		wi.CurrentAttempt = &a
@@ -815,12 +827,13 @@ func (s *Store) scanWorkItem(ctx context.Context, row *sql.Row) (*domain.WorkIte
 
 func (s *Store) scanWorkItemRows(ctx context.Context, rows *sql.Rows) (*domain.WorkItem, error) {
 	wi := &domain.WorkItem{}
-	var sharedID, closedAt, leaseHolder, leaseExpiresAt, currentAttempt, retainedOutcomeRef sql.NullString
+	var sharedID, closedAt, leaseHolder, leaseExpiresAt, leaseIDStr, currentAttempt, retainedOutcomeRef sql.NullString
 	var createdAt, updatedAt string
 	var blocked int
 
 	err := rows.Scan(&wi.ID, &sharedID, &wi.Kind, &wi.Title, &wi.Body, &wi.Status, &wi.Priority,
-		&leaseHolder, &leaseExpiresAt, &currentAttempt, &blocked, &wi.BlockedReason,
+		&leaseHolder, &leaseExpiresAt, &leaseIDStr, &wi.LeaseGeneration,
+		&currentAttempt, &blocked, &wi.BlockedReason,
 		&retainedOutcomeRef, &wi.CreatedBy, &createdAt, &updatedAt, &closedAt, &wi.EventCount)
 	if err != nil {
 		return nil, err
@@ -842,6 +855,10 @@ func (s *Store) scanWorkItemRows(ctx context.Context, rows *sql.Rows) (*domain.W
 	if leaseExpiresAt.Valid {
 		t, _ := time.Parse(time.RFC3339Nano, leaseExpiresAt.String)
 		wi.LeaseExpiresAt = &t
+	}
+	if leaseIDStr.Valid {
+		lid := domain.LeaseID(leaseIDStr.String)
+		wi.LeaseID = &lid
 	}
 	if currentAttempt.Valid {
 		a := domain.AttemptID(currentAttempt.String)

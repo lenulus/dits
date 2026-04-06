@@ -353,7 +353,7 @@ type Event struct {
 | `work.leased` | `{lease_id, lease_duration_secs, lease_expires_at, generation}` |
 | `work.lease_released` | `{lease_id, reason}` |
 | `work.lease_renewed` | `{lease_id, lease_expires_at, generation}` |
-| `work.execution_started` | `{attempt_id, attempt_number, plan_ref?}` |
+| `work.execution_started` | `{attempt_id, plan_ref?}` |
 | `work.execution_completed` | `{attempt_id, summary, output_artifact_refs?}` |
 | `work.execution_failed` | `{attempt_id, error, retryable, output_artifact_refs?}` |
 | `work.execution_abandoned` | `{attempt_id, reason}` |
@@ -510,7 +510,7 @@ When two actors diverge offline and both emit lease/execution events against the
 
 2. **Downstream events inherit lineage validity.** Execution attempts, checkpoints, and completion events on a superseded lease branch are preserved in history but marked as non-authoritative. They do not drive live operational state (`LeaseHolder`, `CurrentAttempt`, etc.).
 
-3. **Attempt numbering is derived, not trusted.** `AttemptNumber` in `work.execution_started` payloads is advisory. The reducer computes canonical attempt numbers from the causal ordering of authoritative `work.execution_started` events during materialization.
+3. **Attempt numbering is derived during materialization.** `work.execution_started` carries only `AttemptID`. Canonical attempt numbers are computed from the causal ordering of authoritative execution-start events during reduction.
 
 **Split-brain example:**
 

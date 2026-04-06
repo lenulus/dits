@@ -41,6 +41,8 @@ type WorkItem struct {
 	// Coordination state
 	LeaseHolder        *ActorID
 	LeaseExpiresAt     *time.Time
+	LeaseID            *LeaseID  // current active lease identity
+	LeaseGeneration    uint64    // monotonically increasing per work item
 	CurrentAttempt     *AttemptID
 	Blocked            bool
 	BlockedReason      string

@@ -72,9 +72,21 @@ func TestProtocol_LeaseReleaseNoLease(t *testing.T) {
 func TestProtocol_LeaseRenewByHolder(t *testing.T) {
 	wi := baseWorkItem()
 	wi.LeaseHolder = leaseHolder("actor_a")
+	wi.LeaseGeneration = 1
 	e := Event{Type: EventWorkLeaseRenewed, ActorID: "actor_a",
-		Payload: MustMarshalPayload(LeaseRenewedPayload{LeaseID: "lea_001"})}
+		Payload: MustMarshalPayload(LeaseRenewedPayload{LeaseID: "lea_001", Generation: 2})}
 	assert.NoError(t, ValidateProtocol(e, wi))
+}
+
+func TestProtocol_LeaseRenewStaleGeneration(t *testing.T) {
+	wi := baseWorkItem()
+	wi.LeaseHolder = leaseHolder("actor_a")
+	wi.LeaseGeneration = 3
+	e := Event{Type: EventWorkLeaseRenewed, ActorID: "actor_a",
+		Payload: MustMarshalPayload(LeaseRenewedPayload{LeaseID: "lea_001", Generation: 2})}
+	err := ValidateProtocol(e, wi)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not greater than current")
 }
 
 func TestProtocol_LeaseRenewByNonHolder(t *testing.T) {
@@ -273,6 +285,59 @@ func TestProtocol_CreatedNilState(t *testing.T) {
 	e := Event{Type: EventWorkCreated,
 		Payload: MustMarshalPayload(WorkCreatedPayload{Title: "Test", Kind: "task"})}
 	assert.NoError(t, ValidateProtocol(e, nil))
+}
+
+// --- Reference integrity ---
+
+func TestProtocol_FindingRetractedExists(t *testing.T) {
+	wi := baseWorkItem()
+	wi.Findings = []Finding{{EventID: "evt_f1", Statement: "leak"}}
+	e := Event{Type: EventWorkFindingRetracted,
+		Payload: MustMarshalPayload(FindingRetractedPayload{OriginalEventID: "evt_f1"})}
+	assert.NoError(t, ValidateProtocol(e, wi))
+}
+
+func TestProtocol_FindingRetractedNotFound(t *testing.T) {
+	wi := baseWorkItem()
+	e := Event{Type: EventWorkFindingRetracted,
+		Payload: MustMarshalPayload(FindingRetractedPayload{OriginalEventID: "evt_nonexistent"})}
+	err := ValidateProtocol(e, wi)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not found in findings")
+}
+
+func TestProtocol_OutcomeRetainedExistingAttempt(t *testing.T) {
+	wi := baseWorkItem()
+	wi.Attempts = []ExecutionAttempt{{AttemptID: "atp_001", Status: "completed", Authoritative: true}}
+	e := Event{Type: EventWorkOutcomeRetained,
+		Payload: MustMarshalPayload(OutcomeRetainedPayload{SubjectKind: "attempt", SubjectRef: "atp_001"})}
+	assert.NoError(t, ValidateProtocol(e, wi))
+}
+
+func TestProtocol_OutcomeRetainedNonexistentAttempt(t *testing.T) {
+	wi := baseWorkItem()
+	e := Event{Type: EventWorkOutcomeRetained,
+		Payload: MustMarshalPayload(OutcomeRetainedPayload{SubjectKind: "attempt", SubjectRef: "atp_nonexistent"})}
+	err := ValidateProtocol(e, wi)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not found in work item")
+}
+
+func TestProtocol_OutcomeDiscardedExistingArtifact(t *testing.T) {
+	wi := baseWorkItem()
+	wi.Artifacts = []Artifact{{ID: "art_001", ContentHash: "sha256:abc"}}
+	e := Event{Type: EventWorkOutcomeDiscarded,
+		Payload: MustMarshalPayload(OutcomeDiscardedPayload{SubjectKind: "artifact", SubjectRef: "sha256:abc"})}
+	assert.NoError(t, ValidateProtocol(e, wi))
+}
+
+func TestProtocol_OutcomeDiscardedNonexistent(t *testing.T) {
+	wi := baseWorkItem()
+	e := Event{Type: EventWorkOutcomeDiscarded,
+		Payload: MustMarshalPayload(OutcomeDiscardedPayload{SubjectKind: "artifact", SubjectRef: "sha256:nonexistent"})}
+	err := ValidateProtocol(e, wi)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not found in work item")
 }
 
 // --- Passthrough events ---
