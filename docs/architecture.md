@@ -96,10 +96,12 @@ Concurrent edits (same parent, different events) resolve automatically:
 
 - **Scalar fields** (title, status, priority, kind): Last writer wins in causal order
 - **Collection fields** (labels, assignees): Add/remove operations merge naturally
-- **Comments, checkpoints, observations, findings**: Append-only, all preserved
-- **Artifacts, relations, attempts**: Add/remove by unique ID, no conflicts possible
+- **Comments, checkpoints, observations, findings, evals, outcomes**: Append-only, all preserved
+- **Artifacts, relations**: Add/remove by unique ID, no conflicts possible
 - **Flags** (blocked): Latest event wins
-- **Coordination** (lease_holder, current_attempt): Latest event wins
+- **Lease lineage** (lease_holder): Authoritative lineage selection — concurrent leases resolved by causal tiebreak; losing lease superseded
+- **Attempt authority**: Attempts inherit lineage from active lease; non-authoritative attempts preserved but don't drive live state; attempt numbers derived during materialization
+- **Outcome selection** (retained_outcome_ref): Last `outcome_retained` wins; `outcome_discarded` clears if it matches the current retained ref
 
 ## Coordination Layer
 
@@ -124,6 +126,10 @@ When two actors diverge offline and both lease/execute against the same work ite
 ### Eval vs Review
 
 Eval is machine-performed assessment (rubric/metric-driven, for autonomous control loops like plan-execute-eval-retry). Review is human-performed assessment (approval, critique, governance gates). Both are first-class coordination activities with dedicated event pairs and durable IDs.
+
+### Outcome Selection
+
+After an optimization loop (execute → eval → retry), outcome events record which result was accepted. `work.outcome_retained` marks an attempt or artifact as the winning output; `work.outcome_discarded` marks it as superseded. The WorkItem tracks `RetainedOutcomeRef` — the currently accepted subject ref. This closes the loop: agents can not only execute, evaluate, and retry, but also record which output was selected and why.
 
 ## Provenance Model
 

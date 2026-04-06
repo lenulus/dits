@@ -7,6 +7,7 @@ DITS is a local-first, event-sourced distributed coordination system for humans 
 - **Work items, not tickets** — durable coordination objects with a `kind` (task, issue, investigation, execution, plan, decision, handoff, eval)
 - **Agent-native coordination** — first-class events for leasing work, checkpointing, recording evidence, proposing plans, and handing off
 - **Eval and review** — machine-performed assessment (eval) for autonomous loops, human-performed assessment (review) for governance gates
+- **Optimization loops** — propose, execute, eval, retain or discard — the full autonomous improvement cycle with structured outcome tracking
 - **Local-first** — create and edit offline, sync when ready
 - **Event-sourced** — every change is an immutable event in a DAG
 - **Deterministic conflict resolution** — concurrent edits converge automatically
