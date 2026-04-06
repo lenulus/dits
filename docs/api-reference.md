@@ -208,6 +208,21 @@ Execution attempts for a work item.
 curl http://localhost:8484/api/v2/work/PROJ-1/attempts
 ```
 
+### GET /api/v2/work/{id}/evals
+
+Evals for a work item, optionally filtered.
+
+```bash
+curl http://localhost:8484/api/v2/work/PROJ-1/evals
+curl http://localhost:8484/api/v2/work/PROJ-1/evals?subject_kind=artifact
+curl http://localhost:8484/api/v2/work/PROJ-1/evals?verdict=pass
+```
+
+| Parameter | Description |
+|-----------|-------------|
+| `subject_kind` | Filter by subject kind (work_item, artifact, attempt, finding, plan) |
+| `verdict` | Filter by verdict (pass, fail, partial) |
+
 ### GET /api/v2/work/{id}/checkpoints
 
 Checkpoints for a work item, optionally filtered by attempt.

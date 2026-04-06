@@ -154,7 +154,7 @@ dits work lease-release <id> [--reason <text>]
 dits work start <id>
 ```
 
-Starts a new execution attempt. Generates AttemptID and computes attempt number from existing attempts.
+Starts a new execution attempt. Generates a unique AttemptID. Display-order attempt numbers are derived during materialization, not assigned by the client.
 
 ### dits work complete
 

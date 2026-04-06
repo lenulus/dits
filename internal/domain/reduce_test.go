@@ -729,11 +729,14 @@ func TestReduce_EvalRequestedAndCompleted(t *testing.T) {
 			ParentEventIDs: []EventID{"evt_002"},
 			ActorID: "actor_agent1", Timestamp: t0.Add(2 * time.Minute),
 			Payload: MustMarshalPayload(EvalCompletedPayload{
-				EvalID:     "evl_001",
-				SubjectRef: "sha256:abc",
-				Metrics:    json.RawMessage(`{"score": 0.92, "issues": 2}`),
-				Verdict:    "pass",
-				ProducedBy: &ProducedBy{ActorID: "actor_agent1", Model: "judge-model"},
+				EvalID:      "evl_001",
+				SubjectKind: "artifact",
+				SubjectRef:  "sha256:abc",
+				RubricRef:   "rubric_code_quality_v1",
+				Summary:     "Code quality is good with minor issues",
+				Metrics:     json.RawMessage(`{"score": 0.92, "issues": 2}`),
+				Verdict:     "pass",
+				ProducedBy:  &ProducedBy{ActorID: "actor_agent1", Model: "judge-model"},
 			}),
 		},
 	}
@@ -741,11 +744,12 @@ func TestReduce_EvalRequestedAndCompleted(t *testing.T) {
 	wi, err := Reduce(events)
 	require.NoError(t, err)
 
-	// eval_requested does not materialize
-	// eval_completed materializes
 	require.Len(t, wi.Evals, 1)
 	assert.Equal(t, EvalID("evl_001"), wi.Evals[0].EvalID)
+	assert.Equal(t, "artifact", wi.Evals[0].SubjectKind)
 	assert.Equal(t, "sha256:abc", wi.Evals[0].SubjectRef)
+	assert.Equal(t, "rubric_code_quality_v1", wi.Evals[0].RubricRef)
+	assert.Equal(t, "Code quality is good with minor issues", wi.Evals[0].Summary)
 	assert.Equal(t, "pass", wi.Evals[0].Verdict)
 	assert.JSONEq(t, `{"score": 0.92, "issues": 2}`, string(wi.Evals[0].Metrics))
 	require.NotNil(t, wi.Evals[0].ProducedBy)

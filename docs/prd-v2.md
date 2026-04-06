@@ -253,13 +253,16 @@ An eval is a structured, repeatable machine-performed assessment. Evals target a
 
 ```go
 type Eval struct {
-    EvalID     EvalID
-    EventID    EventID
-    SubjectRef string          // content hash, work item ID, or artifact ID being evaluated
-    Metrics    json.RawMessage // structured metric results
-    Verdict    string          // pass, fail, partial, etc.
-    ProducedBy *ProducedBy
-    Timestamp  time.Time
+    EvalID      EvalID
+    EventID     EventID
+    SubjectKind string          // work_item, artifact, attempt, finding, plan
+    SubjectRef  string          // ID or content hash of the subject being evaluated
+    RubricRef   string          // optional reference to the rubric/policy used
+    Summary     string          // human-readable summary of the eval result
+    Metrics     json.RawMessage // structured metric results
+    Verdict     string          // pass, fail, partial, etc.
+    ProducedBy  *ProducedBy
+    Timestamp   time.Time
 }
 ```
 
@@ -376,8 +379,8 @@ type Event struct {
 
 | Event | Payload |
 |-------|---------|
-| `work.eval_requested` | `{eval_id, subject_ref, rubric_ref?, scope}` |
-| `work.eval_completed` | `{eval_id, subject_ref, metrics?, verdict, produced_by?}` |
+| `work.eval_requested` | `{eval_id, subject_kind?, subject_ref, rubric_ref?, scope}` |
+| `work.eval_completed` | `{eval_id, subject_kind?, subject_ref, rubric_ref?, summary?, metrics?, verdict, produced_by?}` |
 
 ### 6.8 Relation / Artifact Events
 

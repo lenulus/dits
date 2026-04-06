@@ -468,10 +468,10 @@ func (s *Store) UpsertWorkItem(ctx context.Context, wi *domain.WorkItem) error {
 			producedBy = &s
 		}
 		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO work_item_evals (eval_id, event_id, work_item_id, subject_ref, metrics, verdict, produced_by, timestamp)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-			ev.EvalID, ev.EventID, wi.ID, ev.SubjectRef, metrics, ev.Verdict, producedBy,
-			ev.Timestamp.UTC().Format(time.RFC3339Nano),
+			`INSERT INTO work_item_evals (eval_id, event_id, work_item_id, subject_kind, subject_ref, rubric_ref, summary, metrics, verdict, produced_by, timestamp)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			ev.EvalID, ev.EventID, wi.ID, ev.SubjectKind, ev.SubjectRef, ev.RubricRef, ev.Summary,
+			metrics, ev.Verdict, producedBy, ev.Timestamp.UTC().Format(time.RFC3339Nano),
 		); err != nil {
 			return err
 		}
@@ -1021,7 +1021,7 @@ func (s *Store) loadWorkItemCollections(ctx context.Context, wi *domain.WorkItem
 
 	// Evals
 	rows10, err := s.db.QueryContext(ctx,
-		`SELECT eval_id, event_id, subject_ref, metrics, verdict, produced_by, timestamp
+		`SELECT eval_id, event_id, subject_kind, subject_ref, rubric_ref, summary, metrics, verdict, produced_by, timestamp
 		 FROM work_item_evals WHERE work_item_id = ? ORDER BY timestamp`, wi.ID)
 	if err != nil {
 		return err
@@ -1032,7 +1032,7 @@ func (s *Store) loadWorkItemCollections(ctx context.Context, wi *domain.WorkItem
 		var ev domain.Eval
 		var ts string
 		var metrics, producedBy sql.NullString
-		if err := rows10.Scan(&ev.EvalID, &ev.EventID, &ev.SubjectRef, &metrics, &ev.Verdict, &producedBy, &ts); err != nil {
+		if err := rows10.Scan(&ev.EvalID, &ev.EventID, &ev.SubjectKind, &ev.SubjectRef, &ev.RubricRef, &ev.Summary, &metrics, &ev.Verdict, &producedBy, &ts); err != nil {
 			return err
 		}
 		ev.Timestamp, _ = time.Parse(time.RFC3339Nano, ts)

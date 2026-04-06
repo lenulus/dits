@@ -142,11 +142,14 @@ type Finding struct {
 // Eval is a structured, repeatable machine-performed assessment.
 // Eval = machine judgment. Review = human judgment.
 type Eval struct {
-	EvalID     EvalID
-	EventID    EventID
-	SubjectRef string // content hash, work item ID, or artifact ID being evaluated
-	Metrics    json.RawMessage
-	Verdict    string // pass, fail, partial, etc.
-	ProducedBy *ProducedBy
-	Timestamp  time.Time
+	EvalID      EvalID
+	EventID     EventID
+	SubjectKind string // work_item, artifact, attempt, finding, plan
+	SubjectRef  string // ID or content hash of the subject being evaluated
+	RubricRef   string // optional reference to the rubric/policy used
+	Summary     string // human-readable summary of the eval result
+	Metrics     json.RawMessage
+	Verdict     string // pass, fail, partial, etc.
+	ProducedBy  *ProducedBy
+	Timestamp   time.Time
 }

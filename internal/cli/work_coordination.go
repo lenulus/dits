@@ -528,6 +528,7 @@ var workEvalRequestCmd = &cobra.Command{
 
 		scope, _ := cmd.Flags().GetString("scope")
 		subjectRef, _ := cmd.Flags().GetString("subject")
+		subjectKind, _ := cmd.Flags().GetString("subject-kind")
 
 		evalID := domain.NewEvalID()
 		heads, _ := proj.DB.GetHeads(ctx, wi.ID)
@@ -535,7 +536,7 @@ var workEvalRequestCmd = &cobra.Command{
 			ID: domain.NewEventID(), WorkItemID: wi.ID, Type: domain.EventWorkEvalRequested,
 			ParentEventIDs: heads, ActorID: proj.Config.ActorID, Timestamp: time.Now().UTC(),
 			Payload: domain.MustMarshalPayload(domain.EvalRequestedPayload{
-				EvalID: evalID, SubjectRef: subjectRef, Scope: scope,
+				EvalID: evalID, SubjectKind: subjectKind, SubjectRef: subjectRef, Scope: scope,
 			}),
 		}
 
@@ -566,16 +567,20 @@ var workEvalCompleteCmd = &cobra.Command{
 
 		evalID, _ := cmd.Flags().GetString("eval-id")
 		subjectRef, _ := cmd.Flags().GetString("subject")
+		subjectKind, _ := cmd.Flags().GetString("subject-kind")
 		verdict, _ := cmd.Flags().GetString("verdict")
+		summary, _ := cmd.Flags().GetString("summary")
 
 		heads, _ := proj.DB.GetHeads(ctx, wi.ID)
 		event := domain.Event{
 			ID: domain.NewEventID(), WorkItemID: wi.ID, Type: domain.EventWorkEvalCompleted,
 			ParentEventIDs: heads, ActorID: proj.Config.ActorID, Timestamp: time.Now().UTC(),
 			Payload: domain.MustMarshalPayload(domain.EvalCompletedPayload{
-				EvalID:     domain.EvalID(evalID),
-				SubjectRef: subjectRef,
-				Verdict:    verdict,
+				EvalID:      domain.EvalID(evalID),
+				SubjectKind: subjectKind,
+				SubjectRef:  subjectRef,
+				Verdict:     verdict,
+				Summary:     summary,
 			}),
 		}
 
@@ -643,11 +648,14 @@ func init() {
 
 	workEvalRequestCmd.Flags().StringP("scope", "s", "", "Eval scope (required)")
 	workEvalRequestCmd.Flags().String("subject", "", "Subject reference (content hash, work item ID, etc.)")
+	workEvalRequestCmd.Flags().String("subject-kind", "", "Subject kind: work_item, artifact, attempt, finding, plan")
 	workEvalRequestCmd.MarkFlagRequired("scope")
 
 	workEvalCompleteCmd.Flags().String("eval-id", "", "Eval ID from eval-request (required)")
 	workEvalCompleteCmd.Flags().String("subject", "", "Subject reference")
+	workEvalCompleteCmd.Flags().String("subject-kind", "", "Subject kind: work_item, artifact, attempt, finding, plan")
 	workEvalCompleteCmd.Flags().String("verdict", "", "Verdict: pass, fail, partial (required)")
+	workEvalCompleteCmd.Flags().String("summary", "", "Human-readable summary")
 	workEvalCompleteCmd.MarkFlagRequired("eval-id")
 	workEvalCompleteCmd.MarkFlagRequired("verdict")
 }

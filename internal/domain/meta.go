@@ -278,7 +278,7 @@ func DefaultMetaConfig(projectKey string) MetaConfig {
 			{Slug: "decision", Name: "Decision", WorkflowSlug: "default"},
 			{Slug: "execution", Name: "Execution", WorkflowSlug: "execution"},
 			{Slug: "handoff", Name: "Handoff", WorkflowSlug: "default"},
-			{Slug: "artifact_review", Name: "Artifact Review", WorkflowSlug: "review"},
+			{Slug: "artifact_review", Name: "Artifact Review", WorkflowSlug: "review", Description: "Transitional — may be subsumed by eval"},
 			{Slug: "eval", Name: "Eval", WorkflowSlug: "default"},
 		},
 		Workflows: []Workflow{

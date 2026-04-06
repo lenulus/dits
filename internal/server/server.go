@@ -52,6 +52,7 @@ func New(db store.DB, blobs blob.Store, logger *slog.Logger) *Server {
 		r.Get("/work/{id}/artifacts", s.handleWorkItemArtifacts)
 		r.Get("/work/{id}/attempts", s.handleWorkItemAttempts)
 		r.Get("/work/{id}/checkpoints", s.handleWorkItemCheckpoints)
+		r.Get("/work/{id}/evals", s.handleWorkItemEvals)
 		r.Get("/events", s.handleListEvents)
 		r.Get("/meta", s.handleGetMeta)
 	})
@@ -362,6 +363,37 @@ func (s *Server) handleWorkItemCheckpoints(w http.ResponseWriter, r *http.Reques
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{"checkpoints": checkpoints, "count": len(checkpoints)})
+}
+
+func (s *Server) handleWorkItemEvals(w http.ResponseWriter, r *http.Request) {
+	wi := s.resolveWorkItem(w, r)
+	if wi == nil {
+		return
+	}
+
+	evals := wi.Evals
+	q := r.URL.Query()
+	if v := q.Get("subject_kind"); v != "" {
+		var filtered []domain.Eval
+		for _, ev := range evals {
+			if ev.SubjectKind == v {
+				filtered = append(filtered, ev)
+			}
+		}
+		evals = filtered
+	}
+	if v := q.Get("verdict"); v != "" {
+		var filtered []domain.Eval
+		for _, ev := range evals {
+			if ev.Verdict == v {
+				filtered = append(filtered, ev)
+			}
+		}
+		evals = filtered
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"evals": evals, "count": len(evals)})
 }
 
 func (s *Server) handleListEvents(w http.ResponseWriter, r *http.Request) {

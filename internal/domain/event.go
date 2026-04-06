@@ -321,18 +321,22 @@ type HandoffRejectedPayload struct {
 // --- Eval Payloads ---
 
 type EvalRequestedPayload struct {
-	EvalID     EvalID `json:"eval_id"`
-	SubjectRef string `json:"subject_ref"` // content hash, work item ID, or artifact ID
-	RubricRef  string `json:"rubric_ref,omitempty"`
-	Scope      string `json:"scope"`
+	EvalID      EvalID `json:"eval_id"`
+	SubjectKind string `json:"subject_kind,omitempty"` // work_item, artifact, attempt, finding, plan
+	SubjectRef  string `json:"subject_ref"`
+	RubricRef   string `json:"rubric_ref,omitempty"`
+	Scope       string `json:"scope"`
 }
 
 type EvalCompletedPayload struct {
-	EvalID     EvalID          `json:"eval_id"`
-	SubjectRef string          `json:"subject_ref"`
-	Metrics    json.RawMessage `json:"metrics,omitempty"`
-	Verdict    string          `json:"verdict"` // pass, fail, partial, etc.
-	ProducedBy *ProducedBy     `json:"produced_by,omitempty"`
+	EvalID      EvalID          `json:"eval_id"`
+	SubjectKind string          `json:"subject_kind,omitempty"`
+	SubjectRef  string          `json:"subject_ref"`
+	RubricRef   string          `json:"rubric_ref,omitempty"`
+	Summary     string          `json:"summary,omitempty"`
+	Metrics     json.RawMessage `json:"metrics,omitempty"`
+	Verdict     string          `json:"verdict"` // pass, fail, partial, etc.
+	ProducedBy  *ProducedBy     `json:"produced_by,omitempty"`
 }
 
 // --- Relation / Artifact Payloads ---

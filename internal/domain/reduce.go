@@ -455,13 +455,16 @@ func ApplyEvent(wi *WorkItem, e Event) error {
 			return err
 		}
 		wi.Evals = append(wi.Evals, Eval{
-			EvalID:     p.EvalID,
-			EventID:    e.ID,
-			SubjectRef: p.SubjectRef,
-			Metrics:    p.Metrics,
-			Verdict:    p.Verdict,
-			ProducedBy: p.ProducedBy,
-			Timestamp:  e.Timestamp,
+			EvalID:      p.EvalID,
+			EventID:     e.ID,
+			SubjectKind: p.SubjectKind,
+			SubjectRef:  p.SubjectRef,
+			RubricRef:   p.RubricRef,
+			Summary:     p.Summary,
+			Metrics:     p.Metrics,
+			Verdict:     p.Verdict,
+			ProducedBy:  p.ProducedBy,
+			Timestamp:   e.Timestamp,
 		})
 		wi.UpdatedAt = maxTime(wi.UpdatedAt, e.Timestamp)
 

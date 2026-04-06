@@ -177,8 +177,8 @@ All state changes are recorded as immutable events.
 
 | Type | Payload |
 |------|---------|
-| `work.eval_requested` | `{eval_id, subject_ref, rubric_ref?, scope}` |
-| `work.eval_completed` | `{eval_id, subject_ref, metrics?, verdict, produced_by?}` |
+| `work.eval_requested` | `{eval_id, subject_kind?, subject_ref, rubric_ref?, scope}` |
+| `work.eval_completed` | `{eval_id, subject_kind?, subject_ref, rubric_ref?, summary?, metrics?, verdict, produced_by?}` |
 
 #### Relation / Artifact Events
 
@@ -231,10 +231,12 @@ All clients that have the same set of events will compute the same order and thu
 |------------|------------|
 | Scalar (title, status, priority, kind) | Last writer wins in causal order |
 | Set (labels, assignees) | Add/remove operations merge |
-| Append-only (comments, checkpoints, observations, findings) | All preserved in order |
-| By-ID (artifacts, relations, attempts) | Add/remove by unique ID |
+| Append-only (comments, checkpoints, observations, findings, evals) | All preserved in order |
+| By-ID (artifacts, relations) | Add/remove by unique ID |
 | Flag (blocked) | Latest event wins |
-| Coordination (lease_holder, current_attempt) | Latest event wins |
+| Lease lineage (lease_holder, lease_expires_at) | Authoritative lineage selection — concurrent leases resolved by causal tiebreak; losing lease superseded |
+| Attempt authority (current_attempt, attempts) | Attempts inherit lineage from active lease; non-authoritative attempts preserved but don't drive live state |
+| Attempt numbering | Derived from authoritative execution-start ordering during materialization, not from client payloads |
 
 ---
 
