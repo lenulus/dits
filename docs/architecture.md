@@ -65,6 +65,18 @@ The DAG is stored in SQLite with two structures:
 
 Head maintenance runs inside the same transaction as event insertion: remove parents from heads, add new event as head.
 
+## Validation Tiers
+
+Event correctness is enforced at three levels:
+
+1. **Schema validation** (`ValidateEvent`) — checks references against meta config (kinds, statuses, labels, priorities, artifact types, relation types). Stateless — doesn't need current WorkItem.
+
+2. **Protocol validation** (`ValidateProtocol`) — checks coordination invariants against the current materialized WorkItem state. Authoritative at event creation time: lease required for execution, only lease holder may checkpoint/complete/fail, no double-lease, no double-block. Advisory during sync ingestion (log, don't reject) because the reducer handles offline divergence.
+
+3. **Reducer** (`Reduce`/`ApplyEvent`) — deterministic materialization. Applies all events without rejection. Handles concurrent offline divergence via post-reduction operational lineage resolution.
+
+This separation means: local event creation is strict, sync ingestion is permissive, and materialized state is always deterministic.
+
 ## Reducer
 
 The **reducer** is a pure function: `[]Event -> *WorkItem`. Given causally-ordered events, it produces the materialized work item state.

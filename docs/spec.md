@@ -206,6 +206,29 @@ All state changes are recorded as immutable events.
 - Events MUST carry the `meta_version` of the meta config at creation time.
 - Labels, statuses, and kinds referenced in payloads MUST exist at the event's `meta_version`.
 
+### 3.4 Protocol Invariants
+
+Three validation tiers enforce event correctness:
+
+1. **Schema validation** — meta references (kinds, statuses, labels, priorities, artifact types, relation types)
+2. **Protocol validation** — coordination invariants against current materialized state
+3. **Reducer** — deterministic materialization; applies all events without rejection
+
+Protocol invariants enforced at event creation time:
+
+| Event | Required Precondition |
+|-------|----------------------|
+| `work.leased` | No active lease on the work item |
+| `work.lease_released` | Active lease exists; actor is lease holder |
+| `work.lease_renewed` | Active lease exists; actor is lease holder |
+| `work.execution_started` | Active lease exists; actor is lease holder; no running authoritative attempt |
+| `work.execution_completed/failed/abandoned` | Active attempt exists; attempt is running; actor is lease holder |
+| `work.checkpointed` | Active attempt exists; actor is lease holder |
+| `work.blocked` | Work item is not already blocked |
+| `work.unblocked` | Work item is currently blocked |
+
+During sync ingestion, protocol validation is advisory (log, don't reject). The reducer handles concurrent offline divergence via operational lineage resolution.
+
 ---
 
 ## 4. DAG Structure

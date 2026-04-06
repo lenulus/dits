@@ -206,7 +206,7 @@ func ApplyEvent(wi *WorkItem, e Event) error {
 		}
 		attempt := ExecutionAttempt{
 			AttemptID: p.AttemptID,
-			Number:    p.AttemptNumber,
+			Number:    0, // Derived during resolveOperationalLineage; payload number is advisory.
 			ActorID:   e.ActorID,
 			StartedAt: e.Timestamp,
 			Status:    "running",

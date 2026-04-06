@@ -91,7 +91,7 @@ var workLeaseReleaseCmd = &cobra.Command{
 		event := domain.Event{
 			ID: domain.NewEventID(), WorkItemID: wi.ID, Type: domain.EventWorkLeaseReleased,
 			ParentEventIDs: heads, ActorID: proj.Config.ActorID, Timestamp: time.Now().UTC(),
-			Payload: domain.MustMarshalPayload(domain.LeaseReleasedPayload{LeaseID: "lea_released", Reason: reason}),
+			Payload: domain.MustMarshalPayload(domain.LeaseReleasedPayload{Reason: reason}),
 		}
 
 		if err := appendAndMaterialize(ctx, proj, wi.ID, event); err != nil {

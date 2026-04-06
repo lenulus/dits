@@ -817,7 +817,25 @@ CLI commands for the new domain, plus full integration testing.
 
 ---
 
-## 11. Invariants
+## 11. Protocol Validation
+
+Event correctness is enforced at three tiers:
+
+1. **Schema validation** (`ValidateEvent`) — checks meta references (kinds, statuses, labels, priorities, artifact types, relation types). Stateless.
+2. **Protocol validation** (`ValidateProtocol`) — checks coordination invariants against current materialized WorkItem state. **Authoritative at event creation time** — rejects invalid events before they enter the event log. **Advisory during sync ingestion** — logs warnings but does not reject, because the reducer handles concurrent offline divergence via operational lineage.
+3. **Reducer** (`Reduce`/`ApplyEvent`) — deterministic materialization. Applies all events without rejection. Post-reduction lineage resolution determines authoritative coordination state.
+
+Protocol validation enforces:
+- Lease required for execution start
+- Only lease holder may start, checkpoint, complete, fail, or abandon attempts
+- Only lease holder may release or renew a lease
+- No double-lease (must release before re-leasing)
+- No double-block (must unblock before re-blocking)
+- Attempt must be running before completion/failure
+
+---
+
+## 12. Invariants
 
 These hold at all times, regardless of event ordering or node topology:
 
@@ -836,7 +854,7 @@ These hold at all times, regardless of event ordering or node topology:
 
 ---
 
-## 12. Open Questions
+## 13. Open Questions
 
 Implementation decisions to resolve during build-out, not design blockers:
 
@@ -852,7 +870,7 @@ Implementation decisions to resolve during build-out, not design blockers:
 
 ---
 
-## 13. Success Criteria
+## 14. Success Criteria
 
 1. An agent can lease a work item, checkpoint progress 3 times, and complete execution — all recorded as events in the DAG and visible via `dits work show`
 2. Two agents attempting to lease the same work item: one succeeds, the other gets a conflict (lease already held)

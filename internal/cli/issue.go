@@ -686,6 +686,12 @@ func signEvent(proj *project.Project, e *domain.Event) error {
 }
 
 func appendAndMaterialize(ctx context.Context, proj *project.Project, workItemID domain.WorkItemID, event domain.Event) error {
+	// Protocol validation: check coordination invariants against current state.
+	existing, _ := proj.DB.GetWorkItem(ctx, workItemID)
+	if err := domain.ValidateProtocol(event, existing); err != nil {
+		return err
+	}
+
 	if err := signEvent(proj, &event); err != nil {
 		return fmt.Errorf("signing event: %w", err)
 	}
@@ -704,7 +710,7 @@ func appendAndMaterialize(ctx context.Context, proj *project.Project, workItemID
 		return err
 	}
 
-	existing, _ := proj.DB.GetWorkItem(ctx, workItemID)
+	existing, _ = proj.DB.GetWorkItem(ctx, workItemID)
 	if existing != nil && existing.SharedID != "" {
 		wi.SharedID = existing.SharedID
 	}
