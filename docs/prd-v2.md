@@ -31,6 +31,7 @@ v2 is a **new versioned system**, not an in-place migration of v1 repositories. 
 4. **Artifacts over attachments** — files have types, semantic roles, and producer metadata — they are outputs, not footnotes
 5. **Machine query surfaces** — endpoints that answer "what should I do next?" not just "list all tickets"
 6. **Human projection preserved** — issue tracking is one view over the substrate, not a separate system
+7. **Autonomous optimization loop support** — the substrate supports iterative propose-execute-eval-retry loops where the evaluated subject may be a work item, attempt, artifact, or plan; eval results are structured, queryable, and tied to provenance so agents can improve over time without relying on unstructured logs
 
 ---
 
