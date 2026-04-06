@@ -83,7 +83,7 @@ Generalizes `Issue`. Materialized from events. Issue becomes a specialization (`
 type WorkItem struct {
     ID              WorkItemID
     SharedID        SharedID
-    Kind            string       // task, issue, investigation, plan, decision, execution, handoff, artifact_review
+    Kind            string       // task, issue, investigation, plan, decision, execution, handoff, eval
     Title           string
     Body            string
     Status          string
@@ -131,7 +131,6 @@ Default kinds, extensible via meta:
 | `decision` | A choice to be made between alternatives |
 | `execution` | A concrete run of a plan or procedure |
 | `handoff` | A transfer of responsibility between actors |
-| `artifact_review` | Evaluation of produced artifacts (may be subsumed by `eval`) |
 | `eval` | Machine-performed assessment of artifacts, attempts, findings, or plans |
 
 ### 5.4 Artifact
@@ -635,7 +634,6 @@ func DefaultMetaConfig(projectKey string) MetaConfig {
             {Slug: "decision", Name: "Decision", WorkflowSlug: "default"},
             {Slug: "execution", Name: "Execution", WorkflowSlug: "execution"},
             {Slug: "handoff", Name: "Handoff", WorkflowSlug: "default"},
-            {Slug: "artifact_review", Name: "Artifact Review", WorkflowSlug: "review"},
             {Slug: "eval", Name: "Eval", WorkflowSlug: "default"},
         },
         Workflows: []Workflow{
@@ -847,7 +845,7 @@ Implementation decisions to resolve during build-out, not design blockers:
 
 4. **Blob garbage collection.** When an artifact is removed from a work item, the blob remains in the content-addressed store. When (if ever) are unreferenced blobs cleaned up? Options: never (storage is cheap), manual GC command, reference-counted with periodic sweep. This is a deployment concern, not a protocol concern, but should be documented.
 
-5. ~~**Eval as a first-class concept.**~~ **Resolved:** Eval implemented as work kind + event pair (`work.eval_requested` / `work.eval_completed`). Eval = machine judgment, review = human judgment. `artifact_review` may be subsumed by `eval` long-term.
+5. ~~**Eval as a first-class concept.**~~ **Resolved:** Eval implemented as work kind + event pair (`work.eval_requested` / `work.eval_completed`). Eval = machine judgment, review = human judgment. `artifact_review` removed from defaults — eval + review cover its semantics.
 
 ---
 

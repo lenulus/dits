@@ -800,7 +800,7 @@ func init() {
 	workCreateCmd.Flags().StringP("title", "t", "", "Title (required)")
 	workCreateCmd.Flags().StringP("body", "b", "", "Body/description")
 	workCreateCmd.Flags().StringSliceP("label", "l", nil, "Labels")
-	workCreateCmd.Flags().StringP("kind", "k", "task", "Work kind (task, issue, investigation, execution, plan, decision, handoff, artifact_review, eval)")
+	workCreateCmd.Flags().StringP("kind", "k", "task", "Work kind (task, issue, investigation, execution, plan, decision, handoff, eval)")
 	workCreateCmd.MarkFlagRequired("title")
 
 	workListCmd.Flags().StringP("status", "s", "", "Filter by status")

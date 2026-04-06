@@ -36,7 +36,7 @@ dits work create --title "Login fails on Safari" --kind issue --body "500 error 
 dits work create --title "Deploy v2.1" --kind execution
 ```
 
-Default kind is `task`. Available kinds: `task`, `issue`, `investigation`, `plan`, `decision`, `execution`, `handoff`, `artifact_review`.
+Default kind is `task`. Available kinds: `task`, `issue`, `investigation`, `plan`, `decision`, `execution`, `handoff`, `eval`.
 
 ## List and View
 

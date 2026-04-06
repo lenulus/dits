@@ -41,7 +41,7 @@ dits work create --title <title> [flags]
 | `--title` | `-t` | Yes | | Work item title |
 | `--body` | `-b` | No | | Description |
 | `--label` | `-l` | No | | Labels (comma-separated or repeated) |
-| `--kind` | `-k` | No | `task` | Work kind (task, issue, investigation, execution, plan, decision, handoff, artifact_review) |
+| `--kind` | `-k` | No | `task` | Work kind (task, issue, investigation, execution, plan, decision, handoff, eval) |
 
 Kind is validated against meta config.
 

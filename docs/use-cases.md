@@ -201,7 +201,7 @@ dits work link PROJ-7 depends_on PROJ-6
 ### Code Review Flow
 
 ```bash
-dits work create --title "Review auth refactor" --kind artifact_review
+dits work create --title "Review auth refactor" --kind task
 dits work attach PROJ-8 auth-refactor.patch
 dits work review PROJ-8 --scope "Code quality and security review"
 

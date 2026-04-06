@@ -11,7 +11,7 @@ func TestDefaultMetaConfig(t *testing.T) {
 	m := DefaultMetaConfig("PROJ")
 	assert.Equal(t, MetaVersion(1), m.Version)
 	assert.Equal(t, "PROJ", m.ProjectKey)
-	assert.Len(t, m.WorkKinds, 9)
+	assert.Len(t, m.WorkKinds, 8)
 	assert.Len(t, m.Workflows, 3)
 	assert.Len(t, m.Priorities, 4)
 	assert.Len(t, m.Labels, 0)
@@ -26,7 +26,7 @@ func TestMetaConfig_HasWorkKind(t *testing.T) {
 	m := DefaultMetaConfig("TEST")
 	assert.True(t, m.HasWorkKind("task"))
 	assert.True(t, m.HasWorkKind("execution"))
-	assert.True(t, m.HasWorkKind("artifact_review"))
+	assert.True(t, m.HasWorkKind("eval"))
 	assert.False(t, m.HasWorkKind("epic"))
 }
 
@@ -77,9 +77,9 @@ func TestMetaConfig_GetWorkflowForKind(t *testing.T) {
 	require.NotNil(t, wf)
 	assert.Equal(t, "execution", wf.Slug)
 
-	wf = m.GetWorkflowForKind("artifact_review")
+	wf = m.GetWorkflowForKind("eval")
 	require.NotNil(t, wf)
-	assert.Equal(t, "review", wf.Slug)
+	assert.Equal(t, "default", wf.Slug)
 
 	wf = m.GetWorkflowForKind("nonexistent")
 	assert.Nil(t, wf)

@@ -48,7 +48,7 @@ func TestInit(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, meta)
 	assert.Equal(t, "TEST", meta.ProjectKey)
-	assert.Len(t, meta.WorkKinds, 9)
+	assert.Len(t, meta.WorkKinds, 8)
 }
 
 func TestLoad(t *testing.T) {

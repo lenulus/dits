@@ -30,7 +30,7 @@ type ProducedBy struct {
 type WorkItem struct {
 	ID       WorkItemID
 	SharedID SharedID
-	Kind     string // task, issue, investigation, plan, decision, execution, handoff, artifact_review, eval
+	Kind     string // task, issue, investigation, plan, decision, execution, handoff, eval
 	Title    string
 	Body     string
 	Status   string

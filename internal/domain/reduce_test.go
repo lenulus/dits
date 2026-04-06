@@ -613,7 +613,7 @@ func TestReduce_HandoffReviewEvents(t *testing.T) {
 		{
 			ID: "evt_001", WorkItemID: "wrk_001", Type: EventWorkCreated,
 			ActorID: "actor_alice", Timestamp: t0,
-			Payload: MustMarshalPayload(WorkCreatedPayload{Title: "Review task", Kind: "artifact_review"}),
+			Payload: MustMarshalPayload(WorkCreatedPayload{Title: "Review task", Kind: "task"}),
 		},
 		{
 			ID: "evt_002", WorkItemID: "wrk_001", Type: EventWorkReviewRequested,
