@@ -66,6 +66,7 @@ See [docs/architecture.md](docs/architecture.md) for full details.
 ## Documentation
 
 - [Getting Started](docs/getting-started.md) — hands-on tutorial
+- [Use Cases](docs/use-cases.md) — agent harness integration, human workflows, platform operations
 - [Architecture](docs/architecture.md) — internals and design decisions
 - [CLI Reference](docs/cli-reference.md) — every command and flag
 - [API Reference](docs/api-reference.md) — server HTTP endpoints
