@@ -14,6 +14,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/lenulus/pf/internal/blob"
 	"github.com/lenulus/pf/internal/domain"
+	"github.com/lenulus/pf/internal/logging"
 	"github.com/lenulus/pf/internal/store"
 	dsync "github.com/lenulus/pf/internal/sync"
 )
@@ -96,23 +97,34 @@ func (s *Server) handleSync(w http.ResponseWriter, r *http.Request) {
 	s.syncLock.Lock()
 	defer s.syncLock.Unlock()
 
-	s.logger.Info("sync request",
-		"node_id", req.NodeID,
-		"project", req.ProjectKey,
-		"events_pushed", len(req.Events),
-		"heads", len(req.Heads),
+	// Promote chi's RequestID into the logging-package context key so the
+	// shared ContextHandler emits it as request_id on every record. Lets
+	// a single ULID grep stitch worker MCP log + judge MCP log + this
+	// server's log together for one round-trip.
+	ctx := logging.WithRequestID(r.Context(), middleware.GetReqID(r.Context()))
+
+	s.logger.InfoContext(ctx, "sync request",
+		slog.String("node_id", string(req.NodeID)),
+		slog.String("actor_id", string(req.ActorID)),
+		slog.String("project", req.ProjectKey),
+		slog.Int("events_pushed", len(req.Events)),
+		slog.Int("heads", len(req.Heads)),
 	)
 
-	resp, err := s.engine.HandleSync(r.Context(), req)
+	resp, err := s.engine.HandleSync(ctx, req)
 	if err != nil {
-		s.logger.Error("sync failed", "error", err)
+		s.logger.ErrorContext(ctx, "sync failed",
+			slog.String("actor_id", string(req.ActorID)),
+			slog.Any("err", err),
+		)
 		s.jsonError(w, fmt.Sprintf("sync failed: %v", err), http.StatusInternalServerError)
 		return
 	}
 
-	s.logger.Info("sync response",
-		"events_pulled", len(resp.Events),
-		"shared_ids", len(resp.SharedIDs),
+	s.logger.InfoContext(ctx, "sync response",
+		slog.String("actor_id", string(req.ActorID)),
+		slog.Int("events_pulled", len(resp.Events)),
+		slog.Int("shared_ids", len(resp.SharedIDs)),
 	)
 
 	w.Header().Set("Content-Type", "application/json")

@@ -4,7 +4,6 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -13,6 +12,7 @@ import (
 
 	"github.com/lenulus/pf/internal/blob"
 	"github.com/lenulus/pf/internal/domain"
+	"github.com/lenulus/pf/internal/logging"
 	"github.com/lenulus/pf/internal/server"
 	"github.com/lenulus/pf/internal/store/sqlite"
 )
@@ -23,6 +23,8 @@ func main() {
 	blobDir := flag.String("blobs", "./blobs", "blob storage directory")
 	projectKey := flag.String("project", "", "project key (required)")
 	signatureMode := flag.String("signature-mode", "warn", "signature enforcement: warn, reject, or ignore")
+	logLevel := flag.String("log-level", "info", "log level: error, warn, info, debug, trace")
+	logFormat := flag.String("log-format", "text", "log format: text or json")
 	flag.Parse()
 
 	if *projectKey == "" {
@@ -30,7 +32,12 @@ func main() {
 		os.Exit(1)
 	}
 
-	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	level, err := logging.Parse(*logLevel)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		os.Exit(2)
+	}
+	logger := logging.New(os.Stdout, level, *logFormat)
 
 	db, err := sqlite.Open(*dbPath)
 	if err != nil {

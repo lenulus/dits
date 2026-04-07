@@ -591,7 +591,25 @@ func (w *WorkOps) Lease(ctx context.Context, id domain.WorkItemID) (*LeaseResult
 	return &LeaseResult{WorkItem: newWI, LeaseID: leaseID, LeaseExpiresAt: expiresAt, DurationSec: durationSec}, nil
 }
 
+// LeaseReleaseResult carries lease-hold metrics so callers can log how long
+// every lease was held — useful for spotting stuck/abandoned leases.
+type LeaseReleaseResult struct {
+	WorkItem        *domain.WorkItem
+	LeaseDurHeldMs  int64
+}
+
 func (w *WorkOps) LeaseRelease(ctx context.Context, id domain.WorkItemID, reason string) (*domain.WorkItem, error) {
+	res, err := w.LeaseReleaseDetailed(ctx, id, reason)
+	if err != nil || res == nil {
+		return nil, err
+	}
+	return res.WorkItem, nil
+}
+
+// LeaseReleaseDetailed releases the current lease and returns the held
+// duration in ms. Logs an INFO line so the metric shows up in mcp.log
+// alongside the corresponding event-appended record.
+func (w *WorkOps) LeaseReleaseDetailed(ctx context.Context, id domain.WorkItemID, reason string) (*LeaseReleaseResult, error) {
 	wi, err := w.Proj.DB.GetWorkItem(ctx, id)
 	if err != nil {
 		return nil, err
@@ -600,9 +618,35 @@ func (w *WorkOps) LeaseRelease(ctx context.Context, id domain.WorkItemID, reason
 		return nil, fmt.Errorf("work item not found")
 	}
 	if wi.LeaseHolder == nil {
-		return wi, nil // nothing to release
+		return &LeaseReleaseResult{WorkItem: wi}, nil
 	}
-	return w.simpleEvent(ctx, id, domain.EventWorkLeaseReleased, domain.LeaseReleasedPayload{Reason: reason}, false)
+
+	// Recover the original acquisition timestamp by walking the event log
+	// for the most recent lease event. This is the only place we time
+	// individual lease holds; if it ever shows up on hot paths it's worth
+	// caching the value on WorkItem during reduction.
+	var heldMs int64
+	if events, evErr := w.Proj.DB.GetEventsForWorkItem(ctx, id); evErr == nil {
+		var latest time.Time
+		for _, e := range events {
+			if e.Type == domain.EventWorkLeased && e.Timestamp.After(latest) {
+				latest = e.Timestamp
+			}
+		}
+		if !latest.IsZero() {
+			heldMs = time.Since(latest).Milliseconds()
+		}
+	}
+
+	newWI, err := w.simpleEvent(ctx, id, domain.EventWorkLeaseReleased, domain.LeaseReleasedPayload{Reason: reason}, false)
+	if err != nil {
+		return nil, err
+	}
+	w.Logger().InfoContext(ctx, "lease released",
+		slog.String("work_item", string(id)),
+		slog.Int64("lease_dur_held_ms", heldMs),
+	)
+	return &LeaseReleaseResult{WorkItem: newWI, LeaseDurHeldMs: heldMs}, nil
 }
 
 // StartResult carries the new attempt ID.
