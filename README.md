@@ -101,6 +101,11 @@ make vet            # Run go vet
 
 Requires Go 1.21+ (uses `log/slog`). No CGo — SQLite via `modernc.org/sqlite`.
 
+## Claude Code integration
+
+DITS ships an MCP server (`dits-mcp`) plus skills and subagents for
+Claude Code under [`integrations/claude-code/`](integrations/claude-code/).
+
 ## License
 
 See LICENSE file.

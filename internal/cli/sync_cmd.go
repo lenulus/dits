@@ -1,20 +1,12 @@
 package cli
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
-	"os"
 
-	"github.com/lenulus/pf/internal/domain"
-	dsync "github.com/lenulus/pf/internal/sync"
+	"github.com/lenulus/pf/internal/workops"
 	"github.com/spf13/cobra"
 )
-
-const defaultServerNodeID = domain.NodeID("server")
 
 var syncCmd = &cobra.Command{
 	Use:   "sync",
@@ -22,107 +14,30 @@ var syncCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		serverURL, _ := cmd.Flags().GetString("server")
 
-		proj, err := loadProject()
+		w, err := workops.Open()
 		if err != nil {
 			return err
 		}
-		defer proj.DB.Close()
+		defer w.Shutdown()
 
-		// Resolve server URL: flag > config.
-		if serverURL == "" {
-			serverURL = proj.Config.ServerURL
-		}
-		if serverURL == "" {
-			return fmt.Errorf("no server URL configured; use --server or run 'dits remote set <url>'")
-		}
+		fmt.Printf("Syncing with %s...\n", firstNonEmpty(serverURL, w.Proj.Config.ServerURL))
 
-		// Save server URL to config if provided via flag.
-		if proj.Config.ServerURL == "" {
-			proj.Config.ServerURL = serverURL
-			if err := proj.SaveConfig(); err != nil {
-				return fmt.Errorf("saving config: %w", err)
-			}
-		}
-
-		ctx := context.Background()
-		engine := dsync.NewEngine(proj.DB)
-
-		// Build sync request.
-		req, err := engine.BuildSyncRequest(ctx, proj.Config.NodeID, proj.Config.ProjectKey, defaultServerNodeID)
+		res, err := w.Sync(context.Background(), serverURL)
 		if err != nil {
-			return fmt.Errorf("building sync request: %w", err)
+			return err
 		}
 
-		// Include identity for actor registration.
-		if proj.Identity != nil {
-			req.ActorID = proj.Identity.ActorID
-			req.PublicKey = proj.Identity.PublicKey
+		fmt.Printf("  Pushed %d events\n", res.Pushed)
+		fmt.Printf("  Pulled %d events\n", res.Pulled)
+		if res.NewSharedIDs > 0 {
+			fmt.Printf("  %d new shared IDs assigned\n", res.NewSharedIDs)
 		}
-
-		fmt.Printf("Syncing with %s...\n", serverURL)
-		fmt.Printf("  Pushing %d events\n", len(req.Events))
-
-		// Send to server.
-		client := dsync.NewClient(serverURL)
-		resp, err := client.Sync(ctx, req)
-		if err != nil {
-			return fmt.Errorf("sync failed: %w", err)
+		if res.BlobsUploaded > 0 {
+			fmt.Printf("  Uploaded %d blobs\n", res.BlobsUploaded)
 		}
-
-		// Apply response.
-		if err := engine.ApplySync(ctx, resp, defaultServerNodeID); err != nil {
-			return fmt.Errorf("applying sync response: %w", err)
+		if res.BlobsDownloaded > 0 {
+			fmt.Printf("  Downloaded %d blobs\n", res.BlobsDownloaded)
 		}
-
-		fmt.Printf("  Pulled %d events\n", len(resp.Events))
-		if len(resp.SharedIDs) > 0 {
-			fmt.Printf("  %d new shared IDs assigned\n", len(resp.SharedIDs))
-		}
-
-		// Sync blobs: upload local blobs the server is missing.
-		pushedHashes := collectArtifactHashes(req.Events)
-		if len(pushedHashes) > 0 {
-			missing, err := checkMissingBlobs(ctx, serverURL, pushedHashes)
-			if err != nil {
-				return fmt.Errorf("checking blobs: %w", err)
-			}
-			if len(missing) > 0 {
-				fmt.Printf("  Uploading %d blobs...\n", len(missing))
-				for _, h := range missing {
-					rc, err := proj.Blobs.Get(ctx, h)
-					if err != nil {
-						fmt.Fprintf(os.Stderr, "  warning: blob %s not found locally, skipping\n", h)
-						continue
-					}
-					if err := uploadBlob(ctx, serverURL, h, rc); err != nil {
-						rc.Close()
-						return fmt.Errorf("uploading blob %s: %w", h, err)
-					}
-					rc.Close()
-				}
-			}
-		}
-
-		// Sync blobs: download blobs from pulled events we don't have locally.
-		pulledHashes := collectArtifactHashes(resp.Events)
-		if len(pulledHashes) > 0 {
-			var needed []string
-			for _, h := range pulledHashes {
-				has, _ := proj.Blobs.Has(ctx, h)
-				if !has {
-					needed = append(needed, h)
-				}
-			}
-			if len(needed) > 0 {
-				fmt.Printf("  Downloading %d blobs...\n", len(needed))
-				for _, h := range needed {
-					if err := downloadBlob(ctx, serverURL, h, proj.Blobs); err != nil {
-						fmt.Fprintf(os.Stderr, "  warning: failed to download blob %s: %v\n", h, err)
-					}
-				}
-			}
-		}
-
 		fmt.Println("Sync complete.")
 		return nil
 	},
@@ -179,88 +94,9 @@ func init() {
 	remoteCmd.AddCommand(remoteShowCmd)
 }
 
-// --- Blob sync helpers ---
-
-func collectArtifactHashes(events []domain.Event) []string {
-	seen := make(map[string]struct{})
-	var hashes []string
-	for _, e := range events {
-		switch e.Type {
-		case domain.EventWorkArtifactAdded:
-			var p domain.ArtifactAddedPayload
-			if err := json.Unmarshal(e.Payload, &p); err == nil {
-				if _, ok := seen[p.ContentHash]; !ok {
-					seen[p.ContentHash] = struct{}{}
-					hashes = append(hashes, p.ContentHash)
-				}
-			}
-		case domain.EventWorkEvidenceAttached:
-			var p domain.EvidenceAttachedPayload
-			if err := json.Unmarshal(e.Payload, &p); err == nil {
-				if _, ok := seen[p.ContentHash]; !ok {
-					seen[p.ContentHash] = struct{}{}
-					hashes = append(hashes, p.ContentHash)
-				}
-			}
-		}
+func firstNonEmpty(a, b string) string {
+	if a != "" {
+		return a
 	}
-	return hashes
-}
-
-type blobCheckReq struct {
-	Hashes []string `json:"hashes"`
-}
-
-type blobCheckResp struct {
-	Present []string `json:"present"`
-	Missing []string `json:"missing"`
-}
-
-func checkMissingBlobs(_ context.Context, serverURL string, hashes []string) ([]string, error) {
-	body, _ := json.Marshal(blobCheckReq{Hashes: hashes})
-	resp, err := http.Post(serverURL+"/api/v1/blobs/check", "application/json", bytes.NewReader(body))
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	var result blobCheckResp
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, err
-	}
-	return result.Missing, nil
-}
-
-func uploadBlob(_ context.Context, serverURL, hash string, r io.Reader) error {
-	req, err := http.NewRequest(http.MethodPut, serverURL+"/api/v1/blobs/"+hash, r)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/octet-stream")
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("server returned %d: %s", resp.StatusCode, string(body))
-	}
-	return nil
-}
-
-func downloadBlob(_ context.Context, serverURL, hash string, store interface{ Put(context.Context, string, io.Reader) error }) error {
-	resp, err := http.Get(serverURL + "/api/v1/blobs/" + hash)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("server returned %d", resp.StatusCode)
-	}
-
-	return store.Put(context.Background(), hash, resp.Body)
+	return b
 }

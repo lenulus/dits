@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "dits": {
+      "command": "dits-mcp",
+      "args": ["--project", "/absolute/path/to/your/repo"]
+    }
+  }
+}

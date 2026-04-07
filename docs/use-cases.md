@@ -447,3 +447,16 @@ curl http://localhost:8484/api/v2/work/PROJ-42/artifacts?role=evidence
 # Download a specific artifact blob
 curl http://localhost:8484/api/v1/blobs/sha256:abc123 -o output.txt
 ```
+
+## Claude Code / MCP integration
+
+DITS ships a Model Context Protocol server (`dits-mcp`) plus a bundle
+of Claude Code skills and subagents under
+[`integrations/claude-code/`](../integrations/claude-code/). The work
+loop described above maps directly onto the `dits-work-loop` skill and
+the `dits-worker` subagent; the investigation pattern maps onto
+`dits-investigation` / `dits-investigator`; the eval flow maps onto
+`dits-eval-judge` / `dits-judge`. All three share the same
+`internal/workops` package that backs the CLI, so any guarantees
+described above apply to agent-driven sessions as well.
+

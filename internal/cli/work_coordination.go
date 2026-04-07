@@ -12,89 +12,44 @@ import (
 )
 
 var workLeaseCmd = &cobra.Command{
-	Use:   "lease <id>",
-	Short: "Lease a work item",
-	Args:  cobra.ExactArgs(1),
+	Use:  "lease <id>",
+	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		proj, err := loadProject()
+		w, err := openWorkOps()
 		if err != nil {
 			return err
 		}
-		defer proj.DB.Close()
-
+		defer w.Shutdown()
 		ctx := context.Background()
-		wi, err := resolveWorkItem(ctx, proj, args[0])
+		wi, err := w.ResolveWorkItem(ctx, args[0])
 		if err != nil {
 			return err
 		}
-
-		if wi.LeaseHolder != nil {
-			return fmt.Errorf("work item is already leased by %s", *wi.LeaseHolder)
-		}
-
-		// Determine lease duration from meta policy or default.
-		durationSec := 300
-		meta, _ := loadMeta(ctx, proj)
-		if meta != nil {
-			if p := meta.GetLeasePolicy(wi.Kind); p != nil {
-				durationSec = p.DefaultDurationSec
-			}
-		}
-
-		now := time.Now().UTC()
-		expiresAt := now.Add(time.Duration(durationSec) * time.Second)
-		leaseID := domain.NewLeaseID()
-
-		heads, _ := proj.DB.GetHeads(ctx, wi.ID)
-		event := domain.Event{
-			ID: domain.NewEventID(), WorkItemID: wi.ID, Type: domain.EventWorkLeased,
-			ParentEventIDs: heads, ActorID: proj.Config.ActorID, Timestamp: now,
-			Payload: domain.MustMarshalPayload(domain.LeasedPayload{
-				LeaseID: leaseID, LeaseDurationSec: durationSec,
-				LeaseExpiresAt: expiresAt, Generation: 1,
-			}),
-		}
-
-		if err := appendAndMaterialize(ctx, proj, wi.ID, event); err != nil {
+		res, err := w.Lease(ctx, wi.ID)
+		if err != nil {
 			return err
 		}
-		fmt.Printf("Leased %s (lease %s, expires %s)\n", workItemDisplayID(wi), leaseID, expiresAt.Format(time.RFC3339))
+		fmt.Printf("Leased %s (lease %s, expires %s)\n", workItemDisplayID(wi), res.LeaseID, res.LeaseExpiresAt.Format(time.RFC3339))
 		return nil
 	},
 }
 
 var workLeaseReleaseCmd = &cobra.Command{
-	Use:   "lease-release <id>",
-	Short: "Release a lease on a work item",
-	Args:  cobra.ExactArgs(1),
+	Use:  "lease-release <id>",
+	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		proj, err := loadProject()
-		if err != nil {
-			return err
-		}
-		defer proj.DB.Close()
-
-		ctx := context.Background()
-		wi, err := resolveWorkItem(ctx, proj, args[0])
-		if err != nil {
-			return err
-		}
-
-		if wi.LeaseHolder == nil {
-			fmt.Println("No active lease.")
-			return nil
-		}
-
 		reason, _ := cmd.Flags().GetString("reason")
-
-		heads, _ := proj.DB.GetHeads(ctx, wi.ID)
-		event := domain.Event{
-			ID: domain.NewEventID(), WorkItemID: wi.ID, Type: domain.EventWorkLeaseReleased,
-			ParentEventIDs: heads, ActorID: proj.Config.ActorID, Timestamp: time.Now().UTC(),
-			Payload: domain.MustMarshalPayload(domain.LeaseReleasedPayload{Reason: reason}),
+		w, err := openWorkOps()
+		if err != nil {
+			return err
 		}
-
-		if err := appendAndMaterialize(ctx, proj, wi.ID, event); err != nil {
+		defer w.Shutdown()
+		ctx := context.Background()
+		wi, err := w.ResolveWorkItem(ctx, args[0])
+		if err != nil {
+			return err
+		}
+		if _, err := w.LeaseRelease(ctx, wi.ID, reason); err != nil {
 			return err
 		}
 		fmt.Printf("Released lease on %s\n", workItemDisplayID(wi))
@@ -103,156 +58,100 @@ var workLeaseReleaseCmd = &cobra.Command{
 }
 
 var workStartCmd = &cobra.Command{
-	Use:   "start <id>",
-	Short: "Start an execution attempt",
-	Args:  cobra.ExactArgs(1),
+	Use:  "start <id>",
+	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		proj, err := loadProject()
+		w, err := openWorkOps()
 		if err != nil {
 			return err
 		}
-		defer proj.DB.Close()
-
+		defer w.Shutdown()
 		ctx := context.Background()
-		wi, err := resolveWorkItem(ctx, proj, args[0])
+		wi, err := w.ResolveWorkItem(ctx, args[0])
 		if err != nil {
 			return err
 		}
-
-		attemptID := domain.NewAttemptID()
-
-		heads, _ := proj.DB.GetHeads(ctx, wi.ID)
-		event := domain.Event{
-			ID: domain.NewEventID(), WorkItemID: wi.ID, Type: domain.EventWorkExecutionStarted,
-			ParentEventIDs: heads, ActorID: proj.Config.ActorID, Timestamp: time.Now().UTC(),
-			Payload: domain.MustMarshalPayload(domain.ExecutionStartedPayload{
-				AttemptID: attemptID,
-			}),
-		}
-
-		if err := appendAndMaterialize(ctx, proj, wi.ID, event); err != nil {
+		res, err := w.Start(ctx, wi.ID)
+		if err != nil {
 			return err
 		}
-		fmt.Printf("Started attempt %s on %s\n", attemptID, workItemDisplayID(wi))
+		fmt.Printf("Started attempt %s on %s\n", res.AttemptID, workItemDisplayID(wi))
 		return nil
 	},
 }
 
 var workCompleteCmd = &cobra.Command{
-	Use:   "complete <id>",
-	Short: "Complete the current execution attempt",
-	Args:  cobra.ExactArgs(1),
+	Use:  "complete <id>",
+	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		proj, err := loadProject()
-		if err != nil {
-			return err
-		}
-		defer proj.DB.Close()
-
-		ctx := context.Background()
-		wi, err := resolveWorkItem(ctx, proj, args[0])
-		if err != nil {
-			return err
-		}
-
-		if wi.CurrentAttempt == nil {
-			return fmt.Errorf("no active attempt on %s", workItemDisplayID(wi))
-		}
-
 		summary, _ := cmd.Flags().GetString("summary")
-
-		heads, _ := proj.DB.GetHeads(ctx, wi.ID)
-		event := domain.Event{
-			ID: domain.NewEventID(), WorkItemID: wi.ID, Type: domain.EventWorkExecutionCompleted,
-			ParentEventIDs: heads, ActorID: proj.Config.ActorID, Timestamp: time.Now().UTC(),
-			Payload: domain.MustMarshalPayload(domain.ExecutionCompletedPayload{
-				AttemptID: *wi.CurrentAttempt, Summary: summary,
-			}),
-		}
-
-		if err := appendAndMaterialize(ctx, proj, wi.ID, event); err != nil {
+		w, err := openWorkOps()
+		if err != nil {
 			return err
 		}
-		fmt.Printf("Completed attempt %s on %s\n", *wi.CurrentAttempt, workItemDisplayID(wi))
+		defer w.Shutdown()
+		ctx := context.Background()
+		wi, err := w.ResolveWorkItem(ctx, args[0])
+		if err != nil {
+			return err
+		}
+		attemptID := ""
+		if wi.CurrentAttempt != nil {
+			attemptID = string(*wi.CurrentAttempt)
+		}
+		if _, err := w.Complete(ctx, wi.ID, summary); err != nil {
+			return err
+		}
+		fmt.Printf("Completed attempt %s on %s\n", attemptID, workItemDisplayID(wi))
 		return nil
 	},
 }
 
 var workFailCmd = &cobra.Command{
-	Use:   "fail <id>",
-	Short: "Fail the current execution attempt",
-	Args:  cobra.ExactArgs(1),
+	Use:  "fail <id>",
+	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		proj, err := loadProject()
-		if err != nil {
-			return err
-		}
-		defer proj.DB.Close()
-
-		ctx := context.Background()
-		wi, err := resolveWorkItem(ctx, proj, args[0])
-		if err != nil {
-			return err
-		}
-
-		if wi.CurrentAttempt == nil {
-			return fmt.Errorf("no active attempt on %s", workItemDisplayID(wi))
-		}
-
 		errMsg, _ := cmd.Flags().GetString("error")
 		retryable, _ := cmd.Flags().GetBool("retryable")
-
-		heads, _ := proj.DB.GetHeads(ctx, wi.ID)
-		event := domain.Event{
-			ID: domain.NewEventID(), WorkItemID: wi.ID, Type: domain.EventWorkExecutionFailed,
-			ParentEventIDs: heads, ActorID: proj.Config.ActorID, Timestamp: time.Now().UTC(),
-			Payload: domain.MustMarshalPayload(domain.ExecutionFailedPayload{
-				AttemptID: *wi.CurrentAttempt, Error: errMsg, Retryable: retryable,
-			}),
-		}
-
-		if err := appendAndMaterialize(ctx, proj, wi.ID, event); err != nil {
+		w, err := openWorkOps()
+		if err != nil {
 			return err
 		}
-		fmt.Printf("Failed attempt %s on %s\n", *wi.CurrentAttempt, workItemDisplayID(wi))
+		defer w.Shutdown()
+		ctx := context.Background()
+		wi, err := w.ResolveWorkItem(ctx, args[0])
+		if err != nil {
+			return err
+		}
+		attemptID := ""
+		if wi.CurrentAttempt != nil {
+			attemptID = string(*wi.CurrentAttempt)
+		}
+		if _, err := w.Fail(ctx, wi.ID, errMsg, retryable); err != nil {
+			return err
+		}
+		fmt.Printf("Failed attempt %s on %s\n", attemptID, workItemDisplayID(wi))
 		return nil
 	},
 }
 
 var workCheckpointCmd = &cobra.Command{
-	Use:   "checkpoint <id>",
-	Short: "Record a checkpoint on the current attempt",
-	Args:  cobra.ExactArgs(1),
+	Use:  "checkpoint <id>",
+	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		proj, err := loadProject()
-		if err != nil {
-			return err
-		}
-		defer proj.DB.Close()
-
-		ctx := context.Background()
-		wi, err := resolveWorkItem(ctx, proj, args[0])
-		if err != nil {
-			return err
-		}
-
-		if wi.CurrentAttempt == nil {
-			return fmt.Errorf("no active attempt on %s", workItemDisplayID(wi))
-		}
-
 		summary, _ := cmd.Flags().GetString("summary")
 		progress, _ := cmd.Flags().GetFloat64("progress")
-
-		heads, _ := proj.DB.GetHeads(ctx, wi.ID)
-		event := domain.Event{
-			ID: domain.NewEventID(), WorkItemID: wi.ID, Type: domain.EventWorkCheckpointed,
-			ParentEventIDs: heads, ActorID: proj.Config.ActorID, Timestamp: time.Now().UTC(),
-			Payload: domain.MustMarshalPayload(domain.CheckpointedPayload{
-				AttemptID: *wi.CurrentAttempt, Summary: summary, Progress: progress,
-			}),
+		w, err := openWorkOps()
+		if err != nil {
+			return err
 		}
-
-		if err := appendAndMaterialize(ctx, proj, wi.ID, event); err != nil {
+		defer w.Shutdown()
+		ctx := context.Background()
+		wi, err := w.ResolveWorkItem(ctx, args[0])
+		if err != nil {
+			return err
+		}
+		if _, err := w.Checkpoint(ctx, wi.ID, summary, progress); err != nil {
 			return err
 		}
 		fmt.Printf("Checkpoint [%.0f%%] %s on %s\n", progress*100, summary, workItemDisplayID(wi))
@@ -261,32 +160,21 @@ var workCheckpointCmd = &cobra.Command{
 }
 
 var workBlockCmd = &cobra.Command{
-	Use:   "block <id>",
-	Short: "Mark a work item as blocked",
-	Args:  cobra.ExactArgs(1),
+	Use:  "block <id>",
+	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		proj, err := loadProject()
-		if err != nil {
-			return err
-		}
-		defer proj.DB.Close()
-
-		ctx := context.Background()
-		wi, err := resolveWorkItem(ctx, proj, args[0])
-		if err != nil {
-			return err
-		}
-
 		reason, _ := cmd.Flags().GetString("reason")
-
-		heads, _ := proj.DB.GetHeads(ctx, wi.ID)
-		event := domain.Event{
-			ID: domain.NewEventID(), WorkItemID: wi.ID, Type: domain.EventWorkBlocked,
-			ParentEventIDs: heads, ActorID: proj.Config.ActorID, Timestamp: time.Now().UTC(),
-			Payload: domain.MustMarshalPayload(domain.BlockedPayload{Reason: reason}),
+		w, err := openWorkOps()
+		if err != nil {
+			return err
 		}
-
-		if err := appendAndMaterialize(ctx, proj, wi.ID, event); err != nil {
+		defer w.Shutdown()
+		ctx := context.Background()
+		wi, err := w.ResolveWorkItem(ctx, args[0])
+		if err != nil {
+			return err
+		}
+		if _, err := w.Block(ctx, wi.ID, reason); err != nil {
 			return err
 		}
 		fmt.Printf("Blocked %s: %s\n", workItemDisplayID(wi), reason)
@@ -295,32 +183,21 @@ var workBlockCmd = &cobra.Command{
 }
 
 var workUnblockCmd = &cobra.Command{
-	Use:   "unblock <id>",
-	Short: "Unblock a work item",
-	Args:  cobra.ExactArgs(1),
+	Use:  "unblock <id>",
+	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		proj, err := loadProject()
-		if err != nil {
-			return err
-		}
-		defer proj.DB.Close()
-
-		ctx := context.Background()
-		wi, err := resolveWorkItem(ctx, proj, args[0])
-		if err != nil {
-			return err
-		}
-
 		reason, _ := cmd.Flags().GetString("reason")
-
-		heads, _ := proj.DB.GetHeads(ctx, wi.ID)
-		event := domain.Event{
-			ID: domain.NewEventID(), WorkItemID: wi.ID, Type: domain.EventWorkUnblocked,
-			ParentEventIDs: heads, ActorID: proj.Config.ActorID, Timestamp: time.Now().UTC(),
-			Payload: domain.MustMarshalPayload(domain.UnblockedPayload{Reason: reason}),
+		w, err := openWorkOps()
+		if err != nil {
+			return err
 		}
-
-		if err := appendAndMaterialize(ctx, proj, wi.ID, event); err != nil {
+		defer w.Shutdown()
+		ctx := context.Background()
+		wi, err := w.ResolveWorkItem(ctx, args[0])
+		if err != nil {
+			return err
+		}
+		if _, err := w.Unblock(ctx, wi.ID, reason); err != nil {
 			return err
 		}
 		fmt.Printf("Unblocked %s\n", workItemDisplayID(wi))
@@ -329,32 +206,21 @@ var workUnblockCmd = &cobra.Command{
 }
 
 var workObserveCmd = &cobra.Command{
-	Use:   "observe <id>",
-	Short: "Record an observation",
-	Args:  cobra.ExactArgs(1),
+	Use:  "observe <id>",
+	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		proj, err := loadProject()
-		if err != nil {
-			return err
-		}
-		defer proj.DB.Close()
-
-		ctx := context.Background()
-		wi, err := resolveWorkItem(ctx, proj, args[0])
-		if err != nil {
-			return err
-		}
-
 		summary, _ := cmd.Flags().GetString("summary")
-
-		heads, _ := proj.DB.GetHeads(ctx, wi.ID)
-		event := domain.Event{
-			ID: domain.NewEventID(), WorkItemID: wi.ID, Type: domain.EventWorkObservationRecorded,
-			ParentEventIDs: heads, ActorID: proj.Config.ActorID, Timestamp: time.Now().UTC(),
-			Payload: domain.MustMarshalPayload(domain.ObservationRecordedPayload{Summary: summary}),
+		w, err := openWorkOps()
+		if err != nil {
+			return err
 		}
-
-		if err := appendAndMaterialize(ctx, proj, wi.ID, event); err != nil {
+		defer w.Shutdown()
+		ctx := context.Background()
+		wi, err := w.ResolveWorkItem(ctx, args[0])
+		if err != nil {
+			return err
+		}
+		if _, err := w.Observe(ctx, wi.ID, summary); err != nil {
 			return err
 		}
 		fmt.Printf("Observed: %s\n", summary)
@@ -363,35 +229,22 @@ var workObserveCmd = &cobra.Command{
 }
 
 var workFindingCmd = &cobra.Command{
-	Use:   "finding <id>",
-	Short: "Record a finding",
-	Args:  cobra.ExactArgs(1),
+	Use:  "finding <id>",
+	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		proj, err := loadProject()
-		if err != nil {
-			return err
-		}
-		defer proj.DB.Close()
-
-		ctx := context.Background()
-		wi, err := resolveWorkItem(ctx, proj, args[0])
-		if err != nil {
-			return err
-		}
-
 		statement, _ := cmd.Flags().GetString("statement")
 		confidence, _ := cmd.Flags().GetFloat64("confidence")
-
-		heads, _ := proj.DB.GetHeads(ctx, wi.ID)
-		event := domain.Event{
-			ID: domain.NewEventID(), WorkItemID: wi.ID, Type: domain.EventWorkFindingRecorded,
-			ParentEventIDs: heads, ActorID: proj.Config.ActorID, Timestamp: time.Now().UTC(),
-			Payload: domain.MustMarshalPayload(domain.FindingRecordedPayload{
-				Statement: statement, Confidence: confidence,
-			}),
+		w, err := openWorkOps()
+		if err != nil {
+			return err
 		}
-
-		if err := appendAndMaterialize(ctx, proj, wi.ID, event); err != nil {
+		defer w.Shutdown()
+		ctx := context.Background()
+		wi, err := w.ResolveWorkItem(ctx, args[0])
+		if err != nil {
+			return err
+		}
+		if _, err := w.Finding(ctx, wi.ID, statement, confidence); err != nil {
 			return err
 		}
 		fmt.Printf("Finding [%.0f%%]: %s\n", confidence*100, statement)
@@ -400,33 +253,22 @@ var workFindingCmd = &cobra.Command{
 }
 
 var workPlanCmd = &cobra.Command{
-	Use:   "plan <id>",
-	Short: "Propose a plan",
-	Args:  cobra.ExactArgs(1),
+	Use:  "plan <id>",
+	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		proj, err := loadProject()
-		if err != nil {
-			return err
-		}
-		defer proj.DB.Close()
-
-		ctx := context.Background()
-		wi, err := resolveWorkItem(ctx, proj, args[0])
-		if err != nil {
-			return err
-		}
-
 		summary, _ := cmd.Flags().GetString("summary")
 		plan, _ := cmd.Flags().GetString("plan")
-
-		heads, _ := proj.DB.GetHeads(ctx, wi.ID)
-		event := domain.Event{
-			ID: domain.NewEventID(), WorkItemID: wi.ID, Type: domain.EventWorkPlanProposed,
-			ParentEventIDs: heads, ActorID: proj.Config.ActorID, Timestamp: time.Now().UTC(),
-			Payload: domain.MustMarshalPayload(domain.PlanProposedPayload{Plan: plan, Summary: summary}),
+		w, err := openWorkOps()
+		if err != nil {
+			return err
 		}
-
-		if err := appendAndMaterialize(ctx, proj, wi.ID, event); err != nil {
+		defer w.Shutdown()
+		ctx := context.Background()
+		wi, err := w.ResolveWorkItem(ctx, args[0])
+		if err != nil {
+			return err
+		}
+		if _, err := w.Plan(ctx, wi.ID, summary, plan); err != nil {
 			return err
 		}
 		fmt.Printf("Plan proposed: %s\n", summary)
@@ -435,139 +277,85 @@ var workPlanCmd = &cobra.Command{
 }
 
 var workHandoffCmd = &cobra.Command{
-	Use:   "handoff <id>",
-	Short: "Hand off a work item to another actor",
-	Args:  cobra.ExactArgs(1),
+	Use:  "handoff <id>",
+	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		proj, err := loadProject()
-		if err != nil {
-			return err
-		}
-		defer proj.DB.Close()
-
-		ctx := context.Background()
-		wi, err := resolveWorkItem(ctx, proj, args[0])
-		if err != nil {
-			return err
-		}
-
 		to, _ := cmd.Flags().GetString("to")
 		ctxText, _ := cmd.Flags().GetString("context")
-
-		handoffID := domain.NewHandoffID()
-		heads, _ := proj.DB.GetHeads(ctx, wi.ID)
-		event := domain.Event{
-			ID: domain.NewEventID(), WorkItemID: wi.ID, Type: domain.EventWorkHandedOff,
-			ParentEventIDs: heads, ActorID: proj.Config.ActorID, Timestamp: time.Now().UTC(),
-			Payload: domain.MustMarshalPayload(domain.HandedOffPayload{
-				HandoffID: handoffID, From: proj.Config.ActorID,
-				To: domain.ActorID(to), Context: ctxText,
-			}),
-		}
-
-		if err := appendAndMaterialize(ctx, proj, wi.ID, event); err != nil {
+		w, err := openWorkOps()
+		if err != nil {
 			return err
 		}
-		fmt.Printf("Handed off %s to %s (%s)\n", workItemDisplayID(wi), to, handoffID)
+		defer w.Shutdown()
+		ctx := context.Background()
+		wi, err := w.ResolveWorkItem(ctx, args[0])
+		if err != nil {
+			return err
+		}
+		res, err := w.Handoff(ctx, wi.ID, domain.ActorID(to), ctxText)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("Handed off %s to %s (%s)\n", workItemDisplayID(wi), to, res.HandoffID)
 		return nil
 	},
 }
 
 var workReviewCmd = &cobra.Command{
-	Use:   "review <id>",
-	Short: "Request a review",
-	Args:  cobra.ExactArgs(1),
+	Use:  "review <id>",
+	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		proj, err := loadProject()
-		if err != nil {
-			return err
-		}
-		defer proj.DB.Close()
-
-		ctx := context.Background()
-		wi, err := resolveWorkItem(ctx, proj, args[0])
-		if err != nil {
-			return err
-		}
-
 		scope, _ := cmd.Flags().GetString("scope")
-
-		reviewID := domain.NewReviewID()
-		heads, _ := proj.DB.GetHeads(ctx, wi.ID)
-		event := domain.Event{
-			ID: domain.NewEventID(), WorkItemID: wi.ID, Type: domain.EventWorkReviewRequested,
-			ParentEventIDs: heads, ActorID: proj.Config.ActorID, Timestamp: time.Now().UTC(),
-			Payload: domain.MustMarshalPayload(domain.ReviewRequestedPayload{
-				ReviewID: reviewID, Scope: scope,
-			}),
-		}
-
-		if err := appendAndMaterialize(ctx, proj, wi.ID, event); err != nil {
+		w, err := openWorkOps()
+		if err != nil {
 			return err
 		}
-		fmt.Printf("Review requested on %s (%s): %s\n", workItemDisplayID(wi), reviewID, scope)
+		defer w.Shutdown()
+		ctx := context.Background()
+		wi, err := w.ResolveWorkItem(ctx, args[0])
+		if err != nil {
+			return err
+		}
+		res, err := w.Review(ctx, wi.ID, scope)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("Review requested on %s (%s): %s\n", workItemDisplayID(wi), res.ReviewID, scope)
 		return nil
 	},
 }
 
 var workEvalRequestCmd = &cobra.Command{
-	Use:   "eval-request <id>",
-	Short: "Request a machine evaluation",
-	Args:  cobra.ExactArgs(1),
+	Use:  "eval-request <id>",
+	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		proj, err := loadProject()
-		if err != nil {
-			return err
-		}
-		defer proj.DB.Close()
-
-		ctx := context.Background()
-		wi, err := resolveWorkItem(ctx, proj, args[0])
-		if err != nil {
-			return err
-		}
-
 		scope, _ := cmd.Flags().GetString("scope")
 		subjectRef, _ := cmd.Flags().GetString("subject")
 		subjectKind, _ := cmd.Flags().GetString("subject-kind")
 		rubricRef, _ := cmd.Flags().GetString("rubric-ref")
-
-		evalID := domain.NewEvalID()
-		heads, _ := proj.DB.GetHeads(ctx, wi.ID)
-		event := domain.Event{
-			ID: domain.NewEventID(), WorkItemID: wi.ID, Type: domain.EventWorkEvalRequested,
-			ParentEventIDs: heads, ActorID: proj.Config.ActorID, Timestamp: time.Now().UTC(),
-			Payload: domain.MustMarshalPayload(domain.EvalRequestedPayload{
-				EvalID: evalID, SubjectKind: subjectKind, SubjectRef: subjectRef,
-				RubricRef: rubricRef, Scope: scope,
-			}),
-		}
-
-		if err := appendAndMaterialize(ctx, proj, wi.ID, event); err != nil {
+		w, err := openWorkOps()
+		if err != nil {
 			return err
 		}
-		fmt.Printf("Eval requested on %s (%s): %s\n", workItemDisplayID(wi), evalID, scope)
+		defer w.Shutdown()
+		ctx := context.Background()
+		wi, err := w.ResolveWorkItem(ctx, args[0])
+		if err != nil {
+			return err
+		}
+		res, err := w.EvalRequest(ctx, wi.ID, scope, subjectKind, subjectRef, rubricRef)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("Eval requested on %s (%s): %s\n", workItemDisplayID(wi), res.EvalID, scope)
 		return nil
 	},
 }
 
 var workEvalCompleteCmd = &cobra.Command{
-	Use:   "eval-complete <id>",
-	Short: "Complete a machine evaluation with verdict",
-	Args:  cobra.ExactArgs(1),
+	Use:  "eval-complete <id>",
+	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		proj, err := loadProject()
-		if err != nil {
-			return err
-		}
-		defer proj.DB.Close()
-
-		ctx := context.Background()
-		wi, err := resolveWorkItem(ctx, proj, args[0])
-		if err != nil {
-			return err
-		}
-
 		evalID, _ := cmd.Flags().GetString("eval-id")
 		subjectRef, _ := cmd.Flags().GetString("subject")
 		subjectKind, _ := cmd.Flags().GetString("subject-kind")
@@ -594,22 +382,17 @@ var workEvalCompleteCmd = &cobra.Command{
 			metricsJSON = json.RawMessage(metricsRaw)
 		}
 
-		heads, _ := proj.DB.GetHeads(ctx, wi.ID)
-		event := domain.Event{
-			ID: domain.NewEventID(), WorkItemID: wi.ID, Type: domain.EventWorkEvalCompleted,
-			ParentEventIDs: heads, ActorID: proj.Config.ActorID, Timestamp: time.Now().UTC(),
-			Payload: domain.MustMarshalPayload(domain.EvalCompletedPayload{
-				EvalID:      domain.EvalID(evalID),
-				SubjectKind: subjectKind,
-				SubjectRef:  subjectRef,
-				RubricRef:   rubricRef,
-				Verdict:     verdict,
-				Summary:     summary,
-				Metrics:     metricsJSON,
-			}),
+		w, err := openWorkOps()
+		if err != nil {
+			return err
 		}
-
-		if err := appendAndMaterialize(ctx, proj, wi.ID, event); err != nil {
+		defer w.Shutdown()
+		ctx := context.Background()
+		wi, err := w.ResolveWorkItem(ctx, args[0])
+		if err != nil {
+			return err
+		}
+		if _, err := w.EvalComplete(ctx, wi.ID, evalID, subjectKind, subjectRef, rubricRef, verdict, summary, metricsJSON); err != nil {
 			return err
 		}
 		fmt.Printf("Eval completed on %s: %s\n", workItemDisplayID(wi), verdict)
@@ -618,38 +401,24 @@ var workEvalCompleteCmd = &cobra.Command{
 }
 
 var workRetainCmd = &cobra.Command{
-	Use:   "retain <id>",
-	Short: "Mark an output as the retained/accepted result",
-	Args:  cobra.ExactArgs(1),
+	Use:  "retain <id>",
+	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		proj, err := loadProject()
-		if err != nil {
-			return err
-		}
-		defer proj.DB.Close()
-
-		ctx := context.Background()
-		wi, err := resolveWorkItem(ctx, proj, args[0])
-		if err != nil {
-			return err
-		}
-
 		subjectRef, _ := cmd.Flags().GetString("subject")
 		subjectKind, _ := cmd.Flags().GetString("subject-kind")
 		reason, _ := cmd.Flags().GetString("reason")
 		evalRef, _ := cmd.Flags().GetString("eval-ref")
-
-		heads, _ := proj.DB.GetHeads(ctx, wi.ID)
-		event := domain.Event{
-			ID: domain.NewEventID(), WorkItemID: wi.ID, Type: domain.EventWorkOutcomeRetained,
-			ParentEventIDs: heads, ActorID: proj.Config.ActorID, Timestamp: time.Now().UTC(),
-			Payload: domain.MustMarshalPayload(domain.OutcomeRetainedPayload{
-				SubjectKind: subjectKind, SubjectRef: subjectRef,
-				Reason: reason, EvalRef: evalRef,
-			}),
+		w, err := openWorkOps()
+		if err != nil {
+			return err
 		}
-
-		if err := appendAndMaterialize(ctx, proj, wi.ID, event); err != nil {
+		defer w.Shutdown()
+		ctx := context.Background()
+		wi, err := w.ResolveWorkItem(ctx, args[0])
+		if err != nil {
+			return err
+		}
+		if _, err := w.Retain(ctx, wi.ID, subjectKind, subjectRef, reason, evalRef); err != nil {
 			return err
 		}
 		fmt.Printf("Retained %s %s on %s\n", subjectKind, subjectRef, workItemDisplayID(wi))
@@ -658,36 +427,23 @@ var workRetainCmd = &cobra.Command{
 }
 
 var workDiscardCmd = &cobra.Command{
-	Use:   "discard <id>",
-	Short: "Mark an output as discarded/superseded",
-	Args:  cobra.ExactArgs(1),
+	Use:  "discard <id>",
+	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		proj, err := loadProject()
-		if err != nil {
-			return err
-		}
-		defer proj.DB.Close()
-
-		ctx := context.Background()
-		wi, err := resolveWorkItem(ctx, proj, args[0])
-		if err != nil {
-			return err
-		}
-
 		subjectRef, _ := cmd.Flags().GetString("subject")
 		subjectKind, _ := cmd.Flags().GetString("subject-kind")
 		reason, _ := cmd.Flags().GetString("reason")
-
-		heads, _ := proj.DB.GetHeads(ctx, wi.ID)
-		event := domain.Event{
-			ID: domain.NewEventID(), WorkItemID: wi.ID, Type: domain.EventWorkOutcomeDiscarded,
-			ParentEventIDs: heads, ActorID: proj.Config.ActorID, Timestamp: time.Now().UTC(),
-			Payload: domain.MustMarshalPayload(domain.OutcomeDiscardedPayload{
-				SubjectKind: subjectKind, SubjectRef: subjectRef, Reason: reason,
-			}),
+		w, err := openWorkOps()
+		if err != nil {
+			return err
 		}
-
-		if err := appendAndMaterialize(ctx, proj, wi.ID, event); err != nil {
+		defer w.Shutdown()
+		ctx := context.Background()
+		wi, err := w.ResolveWorkItem(ctx, args[0])
+		if err != nil {
+			return err
+		}
+		if _, err := w.Discard(ctx, wi.ID, subjectKind, subjectRef, reason); err != nil {
 			return err
 		}
 		fmt.Printf("Discarded %s %s on %s\n", subjectKind, subjectRef, workItemDisplayID(wi))
@@ -752,32 +508,32 @@ func init() {
 	workReviewCmd.MarkFlagRequired("scope")
 
 	workEvalRequestCmd.Flags().StringP("scope", "s", "", "Eval scope (required)")
-	workEvalRequestCmd.Flags().String("subject", "", "Subject reference (content hash, work item ID, etc.)")
-	workEvalRequestCmd.Flags().String("subject-kind", "", "Subject kind: work_item, artifact, attempt, finding, plan")
-	workEvalRequestCmd.Flags().String("rubric-ref", "", "Reference to rubric/policy for evaluation")
+	workEvalRequestCmd.Flags().String("subject", "", "Subject reference")
+	workEvalRequestCmd.Flags().String("subject-kind", "", "Subject kind")
+	workEvalRequestCmd.Flags().String("rubric-ref", "", "Rubric reference")
 	workEvalRequestCmd.MarkFlagRequired("scope")
 
-	workEvalCompleteCmd.Flags().String("eval-id", "", "Eval ID from eval-request (required)")
+	workEvalCompleteCmd.Flags().String("eval-id", "", "Eval ID (required)")
 	workEvalCompleteCmd.Flags().String("subject", "", "Subject reference")
-	workEvalCompleteCmd.Flags().String("subject-kind", "", "Subject kind: work_item, artifact, attempt, finding, plan")
-	workEvalCompleteCmd.Flags().String("rubric-ref", "", "Reference to rubric/policy used")
-	workEvalCompleteCmd.Flags().String("verdict", "", "Verdict: pass, fail, partial (required)")
-	workEvalCompleteCmd.Flags().String("summary", "", "Human-readable summary")
-	workEvalCompleteCmd.Flags().String("metrics", "", "Metrics as inline JSON string")
-	workEvalCompleteCmd.Flags().String("metrics-file", "", "Path to JSON file containing metrics")
+	workEvalCompleteCmd.Flags().String("subject-kind", "", "Subject kind")
+	workEvalCompleteCmd.Flags().String("rubric-ref", "", "Rubric reference")
+	workEvalCompleteCmd.Flags().String("verdict", "", "Verdict (required)")
+	workEvalCompleteCmd.Flags().String("summary", "", "Summary")
+	workEvalCompleteCmd.Flags().String("metrics", "", "Metrics inline JSON")
+	workEvalCompleteCmd.Flags().String("metrics-file", "", "Metrics JSON file")
 	workEvalCompleteCmd.MarkFlagRequired("eval-id")
 	workEvalCompleteCmd.MarkFlagRequired("verdict")
 
-	workRetainCmd.Flags().String("subject", "", "Subject reference (attempt ID, artifact ID, etc.) (required)")
-	workRetainCmd.Flags().String("subject-kind", "", "Subject kind: attempt, artifact (required)")
-	workRetainCmd.Flags().String("reason", "", "Why this output was retained")
-	workRetainCmd.Flags().String("eval-ref", "", "Eval ID that informed this decision")
+	workRetainCmd.Flags().String("subject", "", "Subject reference (required)")
+	workRetainCmd.Flags().String("subject-kind", "", "Subject kind (required)")
+	workRetainCmd.Flags().String("reason", "", "Retain reason")
+	workRetainCmd.Flags().String("eval-ref", "", "Eval reference")
 	workRetainCmd.MarkFlagRequired("subject")
 	workRetainCmd.MarkFlagRequired("subject-kind")
 
 	workDiscardCmd.Flags().String("subject", "", "Subject reference (required)")
-	workDiscardCmd.Flags().String("subject-kind", "", "Subject kind: attempt, artifact (required)")
-	workDiscardCmd.Flags().String("reason", "", "Why this output was discarded")
+	workDiscardCmd.Flags().String("subject-kind", "", "Subject kind (required)")
+	workDiscardCmd.Flags().String("reason", "", "Discard reason")
 	workDiscardCmd.MarkFlagRequired("subject")
 	workDiscardCmd.MarkFlagRequired("subject-kind")
 }
