@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -18,11 +19,12 @@ import (
 )
 
 type Server struct {
-	db     store.DB
-	blobs  blob.Store
-	engine *dsync.Engine
-	router chi.Router
-	logger *slog.Logger
+	db       store.DB
+	blobs    blob.Store
+	engine   *dsync.Engine
+	router   chi.Router
+	logger   *slog.Logger
+	syncLock sync.Mutex // serializes sync handlers; SQLite permits one writer
 }
 
 func New(db store.DB, blobs blob.Store, logger *slog.Logger) *Server {
@@ -84,6 +86,15 @@ func (s *Server) handleSync(w http.ResponseWriter, r *http.Request) {
 		s.jsonError(w, fmt.Sprintf("invalid request: %v", err), http.StatusBadRequest)
 		return
 	}
+
+	// Sync ingests events inside multiple transactions on independent
+	// connections. SQLite only allows one writer at a time, so two
+	// concurrent sync requests race for the write lock and one fails with
+	// SQLITE_BUSY even with _busy_timeout set. Serialize sync at the
+	// handler boundary — read endpoints (v2 query API, blob GETs) stay
+	// concurrent because WAL keeps reads non-blocking.
+	s.syncLock.Lock()
+	defer s.syncLock.Unlock()
 
 	s.logger.Info("sync request",
 		"node_id", req.NodeID,
