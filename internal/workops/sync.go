@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 
 	"github.com/lenulus/pf/internal/domain"
@@ -98,12 +99,23 @@ func (w *WorkOps) Sync(ctx context.Context, serverURL string) (*SyncResult, erro
 				continue
 			}
 			if err := downloadBlob(ctx, serverURL, h, proj.Blobs); err != nil {
+				w.Logger().WarnContext(ctx, "blob download failed (continuing)",
+					slog.String("hash", h),
+					slog.Any("err", err),
+				)
 				continue
 			}
 			result.BlobsDownloaded++
 		}
 	}
 
+	w.Logger().InfoContext(ctx, "sync completed",
+		slog.String("server_url", serverURL),
+		slog.Int("pushed", result.Pushed),
+		slog.Int("pulled", result.Pulled),
+		slog.Int("blobs_uploaded", result.BlobsUploaded),
+		slog.Int("blobs_downloaded", result.BlobsDownloaded),
+	)
 	return result, nil
 }
 

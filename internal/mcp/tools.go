@@ -2,22 +2,88 @@ package mcp
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
+	"log/slog"
+	"sort"
+	"time"
 
 	"github.com/lenulus/pf/internal/domain"
+	"github.com/lenulus/pf/internal/logging"
 	"github.com/lenulus/pf/internal/store"
 	"github.com/lenulus/pf/internal/workops"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
+	"github.com/oklog/ulid/v2"
 )
 
-// openOps opens a workops handle, preferring the configured project root.
-func openOps(cfg Config) (*workops.WorkOps, error) {
-	if cfg.ProjectRoot != "" {
-		return workops.OpenAt(cfg.ProjectRoot)
+// newRequestID returns a fresh ULID string used as the per-tool-call
+// request identifier. Threaded through context.Context so workops and
+// store-level log lines tagged with the same id reconstruct one Claude
+// Code action across the stack.
+func newRequestID() string {
+	return ulid.MustNew(ulid.Timestamp(time.Now()), rand.Reader).String()
+}
+
+// argKeys returns a sorted slice of argument keys, used at INFO so we can
+// see "what fields were passed" without logging the values themselves.
+func argKeys(args map[string]any) []string {
+	if len(args) == 0 {
+		return nil
 	}
-	return workops.Open()
+	out := make([]string, 0, len(args))
+	for k := range args {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// redactedArgs returns the safe-to-log subset of args used at DEBUG.
+// Values for high-sensitivity fields (body, payload, plan, summary,
+// statement, context, error, metrics_json) are intentionally excluded;
+// only id-shaped fields and titles round-trip.
+func redactedArgs(args map[string]any) map[string]any {
+	if len(args) == 0 {
+		return nil
+	}
+	allow := map[string]bool{
+		"id": true, "target": true, "actor": true, "to": true,
+		"status": true, "kind": true, "scope": true, "verdict": true,
+		"subject": true, "subject_kind": true, "rubric_ref": true,
+		"eval_id": true, "eval_ref": true, "type": true, "title": true,
+		"server": true, "claimed_by": true, "blocked": true,
+		"include_closed": true, "ready": true, "retryable": true,
+		"progress": true, "confidence": true,
+	}
+	out := make(map[string]any, len(allow))
+	for k, v := range args {
+		if allow[k] {
+			out[k] = v
+		}
+	}
+	return out
+}
+
+// openOps opens a workops handle, preferring the configured project root.
+// The configured logger is attached so workops emits its own structured
+// lines (event-appended, sync warnings, etc.) under the same sink.
+func openOps(cfg Config) (*workops.WorkOps, error) {
+	var (
+		w   *workops.WorkOps
+		err error
+	)
+	if cfg.ProjectRoot != "" {
+		w, err = workops.OpenAt(cfg.ProjectRoot)
+	} else {
+		w, err = workops.Open()
+	}
+	if err != nil {
+		return nil, err
+	}
+	w.SetLogger(cfg.logger())
+	return w, nil
 }
 
 // jsonResult marshals v as an indented JSON string and wraps it as a tool result.
@@ -35,15 +101,82 @@ func errResult(err error) (*mcp.CallToolResult, error) {
 
 type handler func(ctx context.Context, w *workops.WorkOps, req mcp.CallToolRequest) (*mcp.CallToolResult, error)
 
-// withOps is a small middleware that opens WorkOps, calls the handler, and closes.
+// withOps is the middleware for every dits_* tool call. It:
+//   - mints a request_id (ULID) and threads it through context.Context so
+//     downstream workops/store log lines carry the same id;
+//   - opens a fresh WorkOps tied to the configured project root;
+//   - logs an INFO "tool start" before dispatch and INFO "tool ok" or
+//     ERROR "tool failed" after, with tool, dur_ms, request_id, err;
+//   - at INFO logs only the *keys* of the tool arguments — values can
+//     contain user prompts and bodies, so we redact by default. At DEBUG
+//     a safelisted subset is logged; at TRACE the full request payload.
 func withOps(cfg Config, h handler) server.ToolHandlerFunc {
 	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		logger := cfg.logger()
+		reqID := newRequestID()
+		ctx = logging.WithRequestID(ctx, reqID)
+
+		toolName := req.Params.Name
+		args := req.GetArguments()
+
+		actorID := ""
 		w, err := openOps(cfg)
 		if err != nil {
+			logger.ErrorContext(ctx, "tool failed",
+				slog.String("tool", toolName),
+				slog.Any("arg_keys", argKeys(args)),
+				slog.Any("err", err),
+			)
 			return errResult(err)
 		}
 		defer w.Shutdown()
-		return h(ctx, w, req)
+		actorID = string(w.Proj.Config.ActorID)
+
+		logger.InfoContext(ctx, "tool start",
+			slog.String("tool", toolName),
+			slog.String("actor_id", actorID),
+			slog.Any("arg_keys", argKeys(args)),
+		)
+		if logger.Enabled(ctx, slog.LevelDebug) {
+			logger.DebugContext(ctx, "tool args (redacted)",
+				slog.String("tool", toolName),
+				slog.Any("args", redactedArgs(args)),
+			)
+		}
+		if logger.Enabled(ctx, logging.LevelTrace) {
+			logger.Log(ctx, logging.LevelTrace, "tool args (full)",
+				slog.String("tool", toolName),
+				slog.Any("args", args),
+			)
+		}
+
+		start := time.Now()
+		res, hErr := h(ctx, w, req)
+		dur := time.Since(start)
+
+		switch {
+		case hErr != nil:
+			logger.ErrorContext(ctx, "tool failed",
+				slog.String("tool", toolName),
+				slog.String("actor_id", actorID),
+				slog.Int64("dur_ms", dur.Milliseconds()),
+				slog.Any("err", hErr),
+			)
+		case res != nil && res.IsError:
+			logger.ErrorContext(ctx, "tool failed",
+				slog.String("tool", toolName),
+				slog.String("actor_id", actorID),
+				slog.Int64("dur_ms", dur.Milliseconds()),
+				slog.String("err", "tool returned error result"),
+			)
+		default:
+			logger.InfoContext(ctx, "tool ok",
+				slog.String("tool", toolName),
+				slog.String("actor_id", actorID),
+				slog.Int64("dur_ms", dur.Milliseconds()),
+			)
+		}
+		return res, hErr
 	}
 }
 

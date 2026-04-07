@@ -14,6 +14,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"mime"
 	"os"
 	"path/filepath"
@@ -22,6 +23,7 @@ import (
 	"github.com/lenulus/pf/internal/blob"
 	"github.com/lenulus/pf/internal/crypto"
 	"github.com/lenulus/pf/internal/domain"
+	"github.com/lenulus/pf/internal/logging"
 	"github.com/lenulus/pf/internal/project"
 	"github.com/lenulus/pf/internal/store"
 )
@@ -29,7 +31,23 @@ import (
 // WorkOps wraps an open project and exposes high-level work-item operations.
 // Callers are responsible for closing the underlying project (Close()).
 type WorkOps struct {
-	Proj *project.Project
+	Proj   *project.Project
+	logger *slog.Logger
+}
+
+// Logger returns the configured logger, never nil.
+func (w *WorkOps) Logger() *slog.Logger {
+	if w.logger != nil {
+		return w.logger
+	}
+	return logging.Discard()
+}
+
+// SetLogger replaces the logger used for event-emission and warning logs.
+func (w *WorkOps) SetLogger(l *slog.Logger) {
+	if l != nil {
+		w.logger = l
+	}
 }
 
 // Open locates the project from cwd (same discovery rules as the CLI) and
@@ -106,6 +124,11 @@ func (w *WorkOps) ResolveWorkItem(ctx context.Context, ref string) (*domain.Work
 }
 
 // AppendAndMaterialize validates, signs, appends, and re-reduces an event.
+//
+// Logs one INFO line per event with type/work_item/event_id/actor_id and any
+// kind-specific allocated IDs (lease_id, attempt_id, eval_id, ...). On
+// failure logs ERROR with err. The middleware-injected request_id flows
+// through ctx so the line stitches into the per-tool-call request stream.
 func (w *WorkOps) AppendAndMaterialize(ctx context.Context, workItemID domain.WorkItemID, event domain.Event) (*domain.WorkItem, error) {
 	existing, _ := w.Proj.DB.GetWorkItem(ctx, workItemID)
 
@@ -126,23 +149,51 @@ func (w *WorkOps) AppendAndMaterialize(ctx context.Context, workItemID domain.Wo
 		return false
 	}
 
+	log := w.Logger()
 	if err := domain.ValidateProtocolFull(event, existing, hasEvent); err != nil {
+		log.ErrorContext(ctx, "event rejected",
+			slog.String("type", string(event.Type)),
+			slog.String("work_item", string(workItemID)),
+			slog.String("event_id", string(event.ID)),
+			slog.String("actor_id", string(event.ActorID)),
+			slog.Any("err", err),
+		)
 		return nil, err
 	}
 	if err := w.SignEvent(&event); err != nil {
+		log.ErrorContext(ctx, "event sign failed",
+			slog.String("type", string(event.Type)),
+			slog.String("work_item", string(workItemID)),
+			slog.String("event_id", string(event.ID)),
+			slog.Any("err", err),
+		)
 		return nil, fmt.Errorf("signing event: %w", err)
 	}
 	if err := w.Proj.DB.AppendEvents(ctx, []domain.Event{event}); err != nil {
+		log.ErrorContext(ctx, "event append failed",
+			slog.String("type", string(event.Type)),
+			slog.String("work_item", string(workItemID)),
+			slog.String("event_id", string(event.ID)),
+			slog.Any("err", err),
+		)
 		return nil, fmt.Errorf("appending event: %w", err)
 	}
 
 	events, err := w.Proj.DB.GetEventsForWorkItem(ctx, workItemID)
 	if err != nil {
+		log.ErrorContext(ctx, "event reload failed",
+			slog.String("work_item", string(workItemID)),
+			slog.Any("err", err),
+		)
 		return nil, err
 	}
 	ordered := domain.CausalOrder(events)
 	wi, err := domain.Reduce(ordered)
 	if err != nil {
+		log.ErrorContext(ctx, "reduce failed",
+			slog.String("work_item", string(workItemID)),
+			slog.Any("err", err),
+		)
 		return nil, err
 	}
 
@@ -151,9 +202,79 @@ func (w *WorkOps) AppendAndMaterialize(ctx context.Context, workItemID domain.Wo
 		wi.SharedID = existing2.SharedID
 	}
 	if err := w.Proj.DB.UpsertWorkItem(ctx, wi); err != nil {
+		log.ErrorContext(ctx, "upsert failed",
+			slog.String("work_item", string(workItemID)),
+			slog.Any("err", err),
+		)
 		return nil, err
 	}
+
+	attrs := []any{
+		slog.String("type", string(event.Type)),
+		slog.String("work_item", string(workItemID)),
+		slog.String("event_id", string(event.ID)),
+		slog.String("actor_id", string(event.ActorID)),
+	}
+	for _, a := range eventPayloadAttrs(event) {
+		attrs = append(attrs, a)
+	}
+	log.InfoContext(ctx, "event appended", attrs...)
 	return wi, nil
+}
+
+// eventPayloadAttrs extracts the kind-specific allocated IDs from an event
+// payload (lease_id, attempt_id, eval_id, handoff_id, review_id) so the
+// "event appended" log line carries them as discrete fields.
+func eventPayloadAttrs(e domain.Event) []slog.Attr {
+	var out []slog.Attr
+	switch e.Type {
+	case domain.EventWorkLeased:
+		var p domain.LeasedPayload
+		if json.Unmarshal(e.Payload, &p) == nil {
+			out = append(out, slog.String("lease_id", string(p.LeaseID)))
+		}
+	case domain.EventWorkExecutionStarted:
+		var p domain.ExecutionStartedPayload
+		if json.Unmarshal(e.Payload, &p) == nil {
+			out = append(out, slog.String("attempt_id", string(p.AttemptID)))
+		}
+	case domain.EventWorkCheckpointed:
+		var p domain.CheckpointedPayload
+		if json.Unmarshal(e.Payload, &p) == nil {
+			out = append(out, slog.String("attempt_id", string(p.AttemptID)))
+		}
+	case domain.EventWorkExecutionCompleted:
+		var p domain.ExecutionCompletedPayload
+		if json.Unmarshal(e.Payload, &p) == nil {
+			out = append(out, slog.String("attempt_id", string(p.AttemptID)))
+		}
+	case domain.EventWorkExecutionFailed:
+		var p domain.ExecutionFailedPayload
+		if json.Unmarshal(e.Payload, &p) == nil {
+			out = append(out, slog.String("attempt_id", string(p.AttemptID)))
+		}
+	case domain.EventWorkEvalRequested:
+		var p domain.EvalRequestedPayload
+		if json.Unmarshal(e.Payload, &p) == nil {
+			out = append(out, slog.String("eval_id", string(p.EvalID)))
+		}
+	case domain.EventWorkEvalCompleted:
+		var p domain.EvalCompletedPayload
+		if json.Unmarshal(e.Payload, &p) == nil {
+			out = append(out, slog.String("eval_id", string(p.EvalID)))
+		}
+	case domain.EventWorkHandedOff:
+		var p domain.HandedOffPayload
+		if json.Unmarshal(e.Payload, &p) == nil {
+			out = append(out, slog.String("handoff_id", string(p.HandoffID)))
+		}
+	case domain.EventWorkReviewRequested:
+		var p domain.ReviewRequestedPayload
+		if json.Unmarshal(e.Payload, &p) == nil {
+			out = append(out, slog.String("review_id", string(p.ReviewID)))
+		}
+	}
+	return out
 }
 
 func extractPayloadRefKey(e domain.Event) string {
@@ -286,6 +407,13 @@ func (w *WorkOps) CreateWorkItem(ctx context.Context, kind, title, body string, 
 		return nil, fmt.Errorf("allocating shared ID: %w", err)
 	}
 	wi.SharedID = sharedID
+	w.Logger().InfoContext(ctx, "event appended",
+		slog.String("type", string(domain.EventWorkCreated)),
+		slog.String("work_item", string(workItemID)),
+		slog.String("event_id", string(event.ID)),
+		slog.String("actor_id", string(event.ActorID)),
+		slog.String("shared_id", string(sharedID)),
+	)
 	return &CreateResult{WorkItem: wi, SharedID: sharedID}, nil
 }
 

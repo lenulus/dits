@@ -7,6 +7,9 @@
 package mcp
 
 import (
+	"log/slog"
+
+	"github.com/lenulus/pf/internal/logging"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 )
@@ -16,6 +19,18 @@ type Config struct {
 	// ProjectRoot is the directory containing (or inside) a .dits/ repo.
 	// If empty, each handler will fall back to cwd-based discovery.
 	ProjectRoot string
+
+	// Logger receives structured operational logs (one INFO line per tool
+	// call by default; DEBUG/TRACE for redacted/full request payloads).
+	// Defaults to a no-op logger when nil.
+	Logger *slog.Logger
+}
+
+func (c Config) logger() *slog.Logger {
+	if c.Logger != nil {
+		return c.Logger
+	}
+	return logging.Discard()
 }
 
 // NewServer constructs an MCPServer with all dits_* tools registered.
