@@ -13,6 +13,9 @@ session:
 - **`mcp.example.json`** — a ready-to-paste config snippet for your
   `~/.claude.json`.
 
+For verification steps before tagging a release, see
+[`docs/claude-code-verification.md`](../../docs/claude-code-verification.md).
+
 ## Install
 
 ### 1. Get the `dits-mcp` binary
