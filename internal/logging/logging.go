@@ -73,19 +73,22 @@ func Parse(level string) (slog.Level, error) {
 	}
 }
 
-// OpenSink resolves a textual sink target to an io.Writer.
+// OpenSink resolves a textual sink target to an io.WriteCloser.
 //
-// The sentinel "-" maps to stderr (callers explicitly opting out of file
-// logging — never the default for dits-mcp). Any other value is treated as
-// a filesystem path; parent directories are created on demand and the file
-// is opened in append mode. The empty string is rejected so callers cannot
-// silently fall back to stdio.
-func OpenSink(target string) (io.Writer, error) {
+// The sentinel "-" maps to stderr; the returned closer is a no-op so the
+// shared os.Stderr handle is never actually closed by the caller's defer.
+// Any other value is treated as a filesystem path; parent directories are
+// created on demand and the file is opened in append mode. The empty
+// string is rejected so callers cannot silently fall back to stdio.
+//
+// Callers MUST defer Close() on the result. Returning io.WriteCloser
+// (rather than io.Writer) is what makes that obligation visible.
+func OpenSink(target string) (io.WriteCloser, error) {
 	if target == "" {
 		return nil, fmt.Errorf("log sink path is required")
 	}
 	if target == "-" {
-		return os.Stderr, nil
+		return nopCloser{os.Stderr}, nil
 	}
 	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 		return nil, fmt.Errorf("creating log dir: %w", err)
@@ -96,6 +99,12 @@ func OpenSink(target string) (io.Writer, error) {
 	}
 	return f, nil
 }
+
+// nopCloser wraps an io.Writer with a no-op Close, used when the sink is
+// a process-owned handle like os.Stderr that the caller must not close.
+type nopCloser struct{ io.Writer }
+
+func (nopCloser) Close() error { return nil }
 
 // New constructs a *slog.Logger writing to w with the given level/format.
 // Format may be "text" or "json". The handler is wrapped with a

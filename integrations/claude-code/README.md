@@ -70,9 +70,15 @@ shares the `internal/workops.Sync` code path with `dits sync` on the CLI.
 ## Logging and debugging
 
 When Claude Code's tool calls misbehave the MCP server's log file is the
-fastest place to look. `dits-mcp` writes structured logs to a file by
-default — never to stdout/stderr, because those are reserved for the
-JSON-RPC protocol.
+fastest place to look. `dits-mcp` writes its **runtime** structured logs
+to a file by default — never to stdout/stderr — because those streams
+are reserved for the MCP JSON-RPC protocol.
+
+The narrow exception is **fatal startup/exit errors** (e.g. invalid
+flags, unwritable log path, project not found): those are written as
+plain `dits-mcp: <message>` lines to stderr so the launching client
+sees them, since by definition the logger may not be open yet. Normal
+runtime logs never go there.
 
 **Default log location:** `$XDG_STATE_HOME/dits/mcp.log` (or
 `~/.dits/mcp.log` if `XDG_STATE_HOME` is unset).

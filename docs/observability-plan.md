@@ -41,9 +41,15 @@ The CLI exposes `--log-level` (default `info`) and `--log-format`
 flags.
 
 **stdio is sacred for `dits-mcp`** — the MCP protocol speaks JSON-RPC
-over stdout/stderr, so logs must go to a file by default
-(`~/.dits/mcp.log`) or to a `--log-file` path. We never write logs to
-stdout or stderr from `dits-mcp` unless explicitly told to.
+over stdout, so runtime logs must go to a file by default
+(`~/.dits/mcp.log`) or to a `--log-file` path. We never write *runtime*
+logs to stdout or stderr from `dits-mcp` unless explicitly told to.
+
+The one exception is **fatal startup/exit errors** (flag parsing, log
+sink open failure, etc.): these are written as plain
+`dits-mcp: <message>` lines on stderr because by definition the logger
+may not be open yet, and the launching client otherwise has no signal
+that anything went wrong. Normal runtime logs never reach stderr.
 
 ## Cross-cutting: structured context
 

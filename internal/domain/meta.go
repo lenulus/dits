@@ -108,6 +108,31 @@ func (m *MetaConfig) HasStatus(status string) bool {
 	return false
 }
 
+// OpenStatuses returns the deduplicated set of status slugs whose
+// category is "open" across all workflows. This is the canonical input
+// to IsReady when determining whether a work item is actionable, used
+// by the v2 list endpoint and the dits_work_list MCP tool.
+func (m *MetaConfig) OpenStatuses() []string {
+	if m == nil {
+		return nil
+	}
+	seen := make(map[string]struct{})
+	var out []string
+	for _, w := range m.Workflows {
+		for _, s := range w.Statuses {
+			if s.Category != "open" {
+				continue
+			}
+			if _, ok := seen[s.Slug]; ok {
+				continue
+			}
+			seen[s.Slug] = struct{}{}
+			out = append(out, s.Slug)
+		}
+	}
+	return out
+}
+
 func (m *MetaConfig) HasWorkKind(slug string) bool {
 	for _, k := range m.WorkKinds {
 		if k.Slug == slug {

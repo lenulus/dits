@@ -19,7 +19,9 @@ import (
 	ditsmcp "github.com/lenulus/pf/internal/mcp"
 )
 
-func main() {
+func main() { os.Exit(run()) }
+
+func run() int {
 	project := flag.String("project", "", "path to a DITS project directory (containing or inside a .dits/). Defaults to cwd discovery.")
 	logLevel := flag.String("log-level", "info", "log level: error, warn, info, debug, trace")
 	logFormat := flag.String("log-format", "json", "log format: text or json")
@@ -29,7 +31,7 @@ func main() {
 	level, err := logging.Parse(*logLevel)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "dits-mcp:", err)
-		os.Exit(2)
+		return 2
 	}
 
 	sinkPath := *logFile
@@ -37,15 +39,17 @@ func main() {
 		p, err := logging.DefaultMCPLogPath()
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "dits-mcp: resolving default log path:", err)
-			os.Exit(2)
+			return 2
 		}
 		sinkPath = p
 	}
 	sink, err := logging.OpenSink(sinkPath)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "dits-mcp:", err)
-		os.Exit(2)
+		return 2
 	}
+	defer sink.Close()
+
 	logger := logging.New(sink, level, *logFormat)
 
 	version := "dev"
@@ -63,6 +67,7 @@ func main() {
 	if err := ditsmcp.Serve(ditsmcp.Config{ProjectRoot: *project, Logger: logger}); err != nil {
 		logger.Error("mcp_server_exit", "err", err)
 		fmt.Fprintln(os.Stderr, "dits-mcp:", err)
-		os.Exit(1)
+		return 1
 	}
+	return 0
 }

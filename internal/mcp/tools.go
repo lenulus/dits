@@ -223,12 +223,25 @@ func registerTools(s *server.MCPServer, cfg Config) {
 		if _, ok := req.GetArguments()["blocked"]; ok {
 			gotBlockedFlag = true
 		}
+
+		// When ready=true, defer to the canonical domain.IsReady contract
+		// (blocked + leased + running-attempt + open-status checks). The
+		// inline filter this used to do was a strict subset and could
+		// drift from the v2 list endpoint's definition.
+		var openStatuses []string
+		if ready {
+			meta, err := w.LoadMeta(ctx)
+			if err != nil {
+				return errResult(err)
+			}
+			openStatuses = meta.OpenStatuses()
+		}
+
 		var out []domain.WorkItem
-		for _, wi := range items {
-			if ready {
-				if wi.LeaseHolder != nil || wi.Blocked || wi.Status == "closed" {
-					continue
-				}
+		for i := range items {
+			wi := items[i]
+			if ready && !domain.IsReady(&wi, openStatuses) {
+				continue
 			}
 			if claimedBy != "" {
 				if wi.LeaseHolder == nil || string(*wi.LeaseHolder) != claimedBy {
