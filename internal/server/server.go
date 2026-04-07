@@ -243,37 +243,49 @@ func (s *Server) handleListWorkItemsV2(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// ready=true: open-category statuses + no lease + not blocked
-	if q.Get("ready") == "true" {
-		meta, err := s.db.GetCurrentMeta(r.Context())
-		if err != nil {
-			s.jsonError(w, "internal error", http.StatusInternalServerError)
-			return
-		}
-		if meta != nil {
-			var openStatuses []string
-			for _, wf := range meta.Workflows {
-				for _, st := range wf.Statuses {
-					if st.Category == "open" {
-						openStatuses = append(openStatuses, st.Slug)
-					}
-				}
-			}
-			filter.Statuses = openStatuses
-		}
-		blocked := false
-		filter.Blocked = &blocked
-		// lease_holder IS NULL is handled by checking ClaimedBy is empty + adding explicit NULL condition
-		// We add a special Statuses filter and rely on the store to also filter lease_holder IS NULL
-		// For simplicity, use the Ready flag
-		ready := true
-		filter.Ready = &ready
-	}
+	// ready=true is the canonical "actionable now" filter. We deliberately
+	// load the unfiltered set and apply domain.IsReady in Go rather than
+	// pushing the predicate into SQL. Two reasons:
+	//
+	//  1. Correctness. domain.IsReady also rejects items with a running
+	//     authoritative attempt, which lives in the reduced Attempts slice
+	//     and has no column on work_items, so SQL can't express it. Any
+	//     SQL-only "ready" filter is a strict subset and will return items
+	//     IsReady would reject.
+	//
+	//  2. Single source of truth. The dits_work_list MCP tool also routes
+	//     through domain.IsReady; both handlers are guarded by a
+	//     conformance test (TestReadyFilterConformance) that checks they
+	//     return the same set for the same state. Drift here is the kind
+	//     of bug that's expensive to find without that test.
+	//
+	// If profiling ever shows this is hot — it isn't today; the dataset is
+	// per-project and small — the optimization is to push status/lease
+	// filters into SQL as a pre-filter and still apply IsReady in Go as a
+	// post-filter. Do not replace the Go pass with SQL alone.
+	readyFilter := q.Get("ready") == "true"
 
 	items, err := s.db.ListWorkItems(r.Context(), filter)
 	if err != nil {
 		s.jsonError(w, fmt.Sprintf("listing work items: %v", err), http.StatusInternalServerError)
 		return
+	}
+
+	if readyFilter {
+		meta, err := s.db.GetCurrentMeta(r.Context())
+		if err != nil {
+			s.jsonError(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		openStatuses := meta.OpenStatuses()
+		filtered := items[:0]
+		for i := range items {
+			wi := items[i]
+			if domain.IsReady(&wi, openStatuses) {
+				filtered = append(filtered, wi)
+			}
+		}
+		items = filtered
 	}
 
 	w.Header().Set("Content-Type", "application/json")
