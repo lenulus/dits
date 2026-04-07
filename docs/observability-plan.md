@@ -1,6 +1,12 @@
 # Observability Plan — dits-mcp / workops / dits-server
 
-Status: **proposed**, not implemented. Owner: next session.
+Status: **implemented** (Phase 1 + Phase 2 items 6 & 7 + Phase 3 item 9).
+See commits `f6efc4a`, `72422a6`, `52f6d43`, and the follow-up that added
+`--log-level`/`--log-format` to the `dits` CLI.
+
+The remainder of this document is the original plan; the **Implementation
+notes** section at the bottom records what landed, what was skipped, and
+what deviated from the plan as written.
 
 ## Why
 
@@ -248,3 +254,56 @@ tractable.
   one process per session.
 - Log shipping / aggregation (Loki, Datadog). Local files are correct
   until DITS itself is run multi-host.
+
+---
+
+## Implementation notes (post-hoc)
+
+**Landed:**
+
+- **Phase 1, items 1–4:** `internal/logging` package with `New`,
+  `Parse`, `OpenSink`, `DefaultMCPLogPath`, `Discard`, and a
+  `ContextHandler` that pulls `request_id` out of `context.Context`.
+  All three binaries take `--log-level` / `--log-format`. `dits-mcp`
+  also takes `--log-file` (default `$XDG_STATE_HOME/dits/mcp.log`) and
+  refuses to log to stdout/stderr unless `--log-file=-` is passed
+  explicitly. Startup line emitted with the resolved `project_root`
+  and `actor_id`. Tool-call middleware in `internal/mcp` mints a
+  per-call ULID `request_id`, logs `tool start` / `tool ok|failed`
+  with `tool`, `actor_id`, `arg_keys`, `dur_ms`, and (at DEBUG) a
+  redacted arg subset. `internal/workops` emits one INFO `event
+  appended` line per event with `type`, `work_item`, `event_id`,
+  `actor_id`, `shared_id`, and any kind-specific allocated IDs.
+- **Phase 2, item 6:** `dits-server`'s sync handler logs `actor_id` on
+  every request/response/error line.
+- **Phase 2, item 7:** chi `RequestID` is promoted into the shared
+  `logging.ContextHandler` key via `logging.WithRequestID`, so MCP
+  middleware → workops → server lines for the same round-trip carry
+  the same `request_id`. Verified manually.
+- **Phase 3, item 9:** `LeaseRelease` records `lease_dur_held_ms` in
+  the result struct and emits an INFO `lease released` line.
+
+**Skipped:**
+
+- **Phase 2, item 5** (deep structured-error wrapping in workops). The
+  plan said "skip if short on time." `AppendAndMaterialize`'s boundary
+  ERROR records cover the queryable-fields use case for now.
+- **Phase 3, item 8** (`dits events <id> --follow`). Cobra subcommand
+  + reducer-aware tail loop, explicitly optional, deferred.
+- **Phase 3, items 10 and 11** (SQLite slow-query proxy, audit log
+  mode). Out of scope per the original plan.
+
+**Deviations:**
+
+- The plan suggested `workops.Open(opts)` with an opts struct. The
+  implementation kept `Open()`/`OpenAt()` unchanged and added
+  `WorkOps.SetLogger(*slog.Logger)`. Functionally equivalent, smaller
+  diff, no caller breakage.
+- The plan called for per-tool result-ID logging at INFO inside each
+  mutating tool handler. Instead, the workops layer emits one INFO
+  `event appended` line per event with all the relevant IDs. Same
+  call→result mapping reachable with one grep, just emitted from a
+  layer down.
+- The CLI flag work for `cmd/dits` was missed by the initial
+  implementation pass and added in a follow-up commit. Now present
+  on all three binaries.

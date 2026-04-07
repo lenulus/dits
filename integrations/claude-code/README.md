@@ -64,8 +64,55 @@ You can also keep them repo-local in `.claude/skills` and
 
 `dits-mcp` works against a local `.dits/` checkout, exactly like `git`
 works against a local repo. There is no "remote mode." Syncing against a
-`dits-server` remote is an explicit action via the `dits_sync` tool
-(which currently delegates to `dits sync` on the CLI).
+`dits-server` remote is an explicit action via the `dits_sync` tool, which
+shares the `internal/workops.Sync` code path with `dits sync` on the CLI.
+
+## Logging and debugging
+
+When Claude Code's tool calls misbehave the MCP server's log file is the
+fastest place to look. `dits-mcp` writes structured logs to a file by
+default — never to stdout/stderr, because those are reserved for the
+JSON-RPC protocol.
+
+**Default log location:** `$XDG_STATE_HOME/dits/mcp.log` (or
+`~/.dits/mcp.log` if `XDG_STATE_HOME` is unset).
+
+**Flags** (set via the `args` field in `mcp.example.json`):
+
+| Flag | Default | Notes |
+|---|---|---|
+| `--log-level` | `info` | One of `error`, `warn`, `info`, `debug`, `trace`. |
+| `--log-format` | `json` | `json` (machine-friendly, `jq`-able) or `text`. |
+| `--log-file` | _default path above_ | Absolute path; pass `-` to log to stderr (only safe outside of MCP/Claude Code). |
+
+**Cranking up logging when something breaks:**
+
+```json
+{
+  "mcpServers": {
+    "dits": {
+      "command": "dits-mcp",
+      "args": [
+        "--project", "/absolute/path/to/your/repo",
+        "--log-level", "debug",
+        "--log-file", "/tmp/dits-mcp.log"
+      ]
+    }
+  }
+}
+```
+
+Then `tail -f /tmp/dits-mcp.log` (optionally piped through `jq`) shows
+every tool invocation in real time. Each call is bracketed by a `tool
+start` and `tool ok`/`tool failed` line carrying the same `request_id`,
+which is also threaded through the underlying `workops` event-emission
+lines and (if a sync fires) the `dits-server` log. A single
+`grep request_id=…` reconstructs an entire round-trip across all three.
+
+The `dits` CLI and `dits-server` accept the same `--log-level` and
+`--log-format` flags (the CLI logs to stderr by default; the server logs
+to stdout). See [`docs/observability-plan.md`](../../docs/observability-plan.md)
+for the field schema and level discipline.
 
 ## Tool surface
 

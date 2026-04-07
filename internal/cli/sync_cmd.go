@@ -18,6 +18,7 @@ var syncCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+		w.SetLogger(cliLogger)
 		defer w.Shutdown()
 
 		fmt.Printf("Syncing with %s...\n", firstNonEmpty(serverURL, w.Proj.Config.ServerURL))

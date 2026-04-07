@@ -62,12 +62,16 @@ dits work create --title "smoke item" --kind task
   printf '%s\n' '{"jsonrpc":"2.0","method":"notifications/initialized"}'
   printf '%s\n' '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"dits_work_list","arguments":{"ready":true}}}'
   printf '%s\n' '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"dits_meta_show","arguments":{}}}'
-} | dits-mcp --project "$TMP"
+} | dits-mcp --project "$TMP" \
+            --log-level=debug \
+            --log-file=/tmp/mcp-verify.log
 ```
 
 **Pass criteria:** the `id:1` response carries `serverInfo.name = "dits-mcp"`,
 the `id:2` response includes the `SMOKE-1` item, and `id:3` returns the
-full meta config JSON.
+full meta config JSON. `/tmp/mcp-verify.log` contains a `mcp_server_start`
+line with the resolved `project_root`, plus matched `tool start` /
+`tool ok` records for each call carrying `dur_ms` and a `request_id`.
 
 Alternative: `npx @modelcontextprotocol/inspector dits-mcp --project $(pwd)`
 for an interactive UI.
@@ -83,7 +87,8 @@ dits-server -addr 127.0.0.1:18765 \
             -db /tmp/dits-verify.db \
             -blobs /tmp/dits-verify-blobs \
             -project SMOKE \
-            -signature-mode ignore
+            -signature-mode ignore \
+            -log-level debug
 
 # terminal 2
 TMP=$(mktemp -d) && cd "$TMP"
@@ -95,7 +100,9 @@ dits remote set http://127.0.0.1:18765
   printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"verify","version":"0.0.1"}}}'
   printf '%s\n' '{"jsonrpc":"2.0","method":"notifications/initialized"}'
   printf '%s\n' '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"dits_sync","arguments":{}}}'
-} | dits-mcp --project "$TMP"
+} | dits-mcp --project "$TMP" \
+            --log-level=debug \
+            --log-file=/tmp/mcp-sync-verify.log
 ```
 
 **Pass criteria:** the `dits_sync` response is a JSON `SyncResult` with
@@ -116,7 +123,9 @@ Code session.
    ```
 2. Add the MCP server to `~/.claude.json` (merge the snippet from
    `integrations/claude-code/mcp.example.json` into your `mcpServers`,
-   pointing `--project` at a real DITS project).
+   pointing `--project` at a real DITS project). For verification, append
+   `--log-level=debug` and `--log-file=/tmp/dits-mcp.log` to the `args`
+   array so you can `tail -f` the log while Claude is working.
 3. Restart Claude Code.
 
 **Run**
@@ -138,6 +147,9 @@ In Claude Code, prompt: **"work the queue"**.
 - `dits work show <id>` after the session shows the full event sequence:
   `lease-acquired → attempt-started → progress-checkpoint* →
   attempt-completed → lease-released`.
+- `/tmp/dits-mcp.log` contains the matching `tool start`/`tool ok` MCP
+  middleware lines and the underlying `event appended` workops lines,
+  all sharing one `request_id` per Claude tool invocation.
 
 ## 7. Multi-agent worker + judge (manual, ~15 minutes)
 
@@ -145,7 +157,14 @@ Verify the eval/retry branch with two cooperating sessions.
 
 **Setup**: same as step 6, but open two Claude Code windows in the same
 project. Configure one to use the `dits-worker` subagent, the other to
-use `dits-judge`.
+use `dits-judge`. Point the two sessions at different log files
+(`/tmp/dits-mcp-worker.log`, `/tmp/dits-mcp-judge.log`) so the
+interleaving is recoverable after the fact.
+
+> Tip: when reconstructing what happened, `grep work_item=<id>` across
+> the worker log, the judge log, and `dits-server`'s output gives you
+> the full causal sequence in one timeline. Each Claude tool call also
+> carries a `request_id` ULID that's threaded through to `dits-server`.
 
 **Run**
 

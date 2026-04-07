@@ -34,7 +34,14 @@ func printJSON(v any) error {
 	return nil
 }
 
-func openWorkOps() (*workops.WorkOps, error) { return workops.Open() }
+func openWorkOps() (*workops.WorkOps, error) {
+	w, err := workops.Open()
+	if err != nil {
+		return nil, err
+	}
+	w.SetLogger(cliLogger)
+	return w, nil
+}
 
 func workItemDisplayID(wi *domain.WorkItem) string {
 	if wi.SharedID != "" {
