@@ -5,57 +5,35 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/lenulus/pf/internal/crypto"
 	"github.com/lenulus/pf/internal/domain"
 	"github.com/lenulus/pf/internal/project"
+	"github.com/lenulus/pf/internal/workops"
 	"github.com/spf13/cobra"
 )
 
-// loadProject mirrors the legacy CLI helper: discover the project root from
-// cwd and open it. Most CLI commands still use this directly; work commands
-// go through internal/workops instead.
+// loadProject discovers and opens the project from cwd. Thin delegate to
+// workops.Open so non-work CLI commands share the same discovery path as
+// the work CLI and the MCP server.
 func loadProject() (*project.Project, error) {
-	root, err := project.FindRoot()
+	w, err := workops.Open()
 	if err != nil {
 		return nil, err
 	}
-	return project.Load(root)
+	return w.Proj, nil
 }
 
+// loadMeta and resolveWorkItem delegate to workops so the meta-loading and
+// reference resolution logic lives in exactly one place.
 func loadMeta(ctx context.Context, proj *project.Project) (*domain.MetaConfig, error) {
-	meta, err := proj.DB.GetCurrentMeta(ctx)
-	if err != nil {
-		return nil, err
-	}
-	if meta == nil {
-		return nil, fmt.Errorf("no meta configuration found")
-	}
-	return meta, nil
+	return (&workops.WorkOps{Proj: proj}).LoadMeta(ctx)
 }
 
 func signEvent(proj *project.Project, e *domain.Event) error {
-	if k := proj.PrivKey(); k != nil {
-		return crypto.SignEvent(e, k)
-	}
-	return nil
+	return (&workops.WorkOps{Proj: proj}).SignEvent(e)
 }
 
 func resolveWorkItem(ctx context.Context, proj *project.Project, ref string) (*domain.WorkItem, error) {
-	wi, err := proj.DB.GetWorkItemBySharedID(ctx, domain.SharedID(ref))
-	if err != nil {
-		return nil, err
-	}
-	if wi != nil {
-		return wi, nil
-	}
-	wi, err = proj.DB.GetWorkItem(ctx, domain.WorkItemID(ref))
-	if err != nil {
-		return nil, err
-	}
-	if wi != nil {
-		return wi, nil
-	}
-	return nil, fmt.Errorf("work item not found: %s", ref)
+	return (&workops.WorkOps{Proj: proj}).ResolveWorkItem(ctx, ref)
 }
 
 var rootCmd = &cobra.Command{
