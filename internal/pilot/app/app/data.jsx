@@ -582,8 +582,38 @@ const MILESTONES_FINAL = [
   ...CHILD_MILESTONES,
 ];
 
-window.DATA = {
-  ACTORS, TAXONOMIES, ROLES, ROLE_CONSTRAINTS,
-  MILESTONES: MILESTONES_FINAL, RFCS, PILOT_LOG, DECISIONS, OUTCOMES,
-  ROLE_BINDINGS, EVENT_LOG, ACK_AMENDMENTS, INDICATORS,
-};
+/* The hand-authored seed, kept as a fallback for when /api/data is
+   unreachable (local dev with no substrate). Wrapped in a function so the
+   live load below can fall back to it without re-running the file. */
+function seedData() {
+  return {
+    ACTORS, TAXONOMIES, ROLES, ROLE_CONSTRAINTS,
+    MILESTONES: MILESTONES_FINAL, RFCS, PILOT_LOG, DECISIONS, OUTCOMES,
+    ROLE_BINDINGS, EVENT_LOG, ACK_AMENDMENTS, INDICATORS,
+  };
+}
+
+/* Live data load. The prototype reads window.DATA synchronously at module
+   load (views.jsx/App.jsx capture it before first render), and data.jsx runs
+   first in script order — so we fetch /api/data with a *synchronous* XHR here
+   to preserve that contract with zero async restructuring. This is acceptable
+   for an internal tool booting once. On any failure (no substrate, bad JSON,
+   empty body) we fall back to the authored seed so the prototype still runs. */
+(function loadLiveData() {
+  try {
+    const xhr = new XMLHttpRequest();
+    xhr.open('GET', '/api/data', false); // false = synchronous
+    xhr.send(null);
+    if (xhr.status >= 200 && xhr.status < 300 && xhr.responseText) {
+      const live = JSON.parse(xhr.responseText);
+      if (live && typeof live === 'object') {
+        window.DATA = live;
+        return;
+      }
+    }
+  } catch (e) {
+    /* fall through to seed */
+    console.warn('pilot: /api/data load failed, using seed fallback', e);
+  }
+  window.DATA = seedData();
+})();

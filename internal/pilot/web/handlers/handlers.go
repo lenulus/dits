@@ -77,6 +77,10 @@ func (s *Server) Register(mux *http.ServeMux) {
 	// Phase-5 write path: POST endpoints that perform one MCP mutation each.
 	s.registerMutations(mux)
 
+	// Pilot pivot: the prototype app's live data feed + JSON write endpoint.
+	mux.HandleFunc("GET /api/data", s.apiData)
+	s.registerAPIMutate(mux)
+
 	// HTMX partial-swap endpoints (/partials/...) — inline cell edits, panel
 	// tab/row swaps, in-place Attention actions. See partials.go.
 	s.registerPartials(mux)

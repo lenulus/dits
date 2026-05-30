@@ -43,6 +43,17 @@ function App() {
     setEvents([e, ...events]);
   }
 
+  /* persist fires the matching signed-event mutation against /api/mutate after
+     an optimistic local update. Fire-and-forget: the UI already reflects the
+     change; a full reload reconciles via /api/data. We never block on this. */
+  function persist(action, payload) {
+    fetch('/api/mutate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action, ...payload }),
+    }).catch(err => console.warn('pilot: persist failed', action, err));
+  }
+
   const actions = {
     setView: (v) => { setView(v); setActiveId(null); setSelectedIds(new Set()); },
     setSelectedIds,
@@ -67,19 +78,23 @@ function App() {
       setMilestones(ms => ms.map(m => m.id === id ? { ...m, ...patch } : m));
       const key = Object.keys(patch)[0];
       if (key && !key.startsWith('_')) pushEvent('work.field_updated', id, `field=${key}`);
+      persist('updateMilestone', { id, patch });
     },
     updateRfc: (id, patch) => {
       setRfcs(rs => rs.map(r => r.id === id ? { ...r, ...patch } : r));
       pushEvent('work.field_updated', id, `field=${Object.keys(patch)[0]}`);
+      persist('updateRfc', { id, patch });
     },
     updateDecision: (id, patch) => {
       setDecisions(ds => ds.map(d => d.id === id ? { ...d, ...patch } : d));
       if (patch.status === 'resolved') pushEvent('work.closed', id, 'resolution=resolved');
       if (patch.status === 'escalated') pushEvent('work.review_requested', id, 'reviewer=leadership');
+      persist('updateDecision', { id, patch });
     },
     updateOutcome: (id, patch) => {
       setOutcomes(os => os.map(o => o.id === id ? { ...o, ...patch } : o));
       if (patch.result) pushEvent('work.eval_completed', id, `result=${patch.result}`);
+      persist('updateOutcome', { id, patch });
     },
     updateBinding: (id, patch) => {
       setBindings(bs => bs.map(b => {
@@ -89,13 +104,16 @@ function App() {
         next.diagnostic = computeBindingDiagnostic(next, bindings, milestones);
         return next;
       }));
-      pushEvent('work.role_bound', bindings.find(b => b.id === id)?.milestone || '—', `role=${patch.role || '?'} · actor=${patch.actor || '?'}`);
+      const b = bindings.find(x => x.id === id);
+      pushEvent('work.role_bound', b?.milestone || '—', `role=${patch.role || '?'} · actor=${patch.actor || '?'}`);
+      persist('updateBinding', { id: b?.milestone, role: patch.role || b?.role, actor: patch.actor !== undefined ? patch.actor : b?.actor });
     },
     addLogEntry: ({ kind, body, milestone }) => {
       const num = (log[0]?.num || 247) + 1;
       const e = { num, milestone, kind, by:'krivas', time: new Date().toISOString().replace('T',' ').slice(0,16), body };
       setLog([e, ...log]);
       pushEvent('work.observation_recorded', milestone, `pilot_log_entry_type=${kind}`, 'krivas');
+      persist('addLogEntry', { id: milestone, kind, body });
     },
     newMilestone: () => {
       const id = 'PROJ-' + Math.floor(220 + Math.random()*40);
@@ -107,6 +125,7 @@ function App() {
       setMilestones([m, ...milestones]);
       pushEvent('work.created', id, 'kind=milestone');
       setActiveId(id); setActiveKind('milestone');
+      persist('newMilestone', { title: m.title });
     },
     newRfc: () => {
       const id = 'PROJ-' + Math.floor(160 + Math.random()*30);
@@ -114,6 +133,7 @@ function App() {
       setRfcs([r, ...rfcs]);
       pushEvent('work.created', id, 'kind=rfc');
       setActiveId(id); setActiveKind('rfc');
+      persist('newRfc', { title: r.title });
     },
     newDecision: () => {
       const id = 'DB-' + Math.floor(95 + Math.random()*30);
@@ -121,6 +141,7 @@ function App() {
       setDecisions([d, ...decisions]);
       pushEvent('work.created', id, 'kind=decision_block');
       setActiveId(id); setActiveKind('decision');
+      persist('newDecision', { title: d.summary });
     },
     newBinding: () => {
       const id = 'rb-' + (bindings.length + 1);
@@ -164,14 +185,17 @@ function App() {
       setMilestones([m, ...milestones]);
       pushEvent('work.created', id, `kind=milestone · from_rfc=${rfcId}`);
       setView('portfolio'); setActiveId(id); setActiveKind('milestone'); setActiveTab(null);
+      persist('spawnMilestone', { title: m.title, rfcId });
     },
     addDep: (id, depId) => {
       setMilestones(ms => ms.map(m => m.id === id ? { ...m, deps: [...(m.deps || []), depId] } : m));
       pushEvent('work.linked', id, `depends_on=${depId}`);
+      persist('addDep', { id, dep: depId });
     },
     removeDep: (id, depId) => {
       setMilestones(ms => ms.map(m => m.id === id ? { ...m, deps: (m.deps || []).filter(x => x !== depId) } : m));
       pushEvent('work.unlinked', id, `depends_on=${depId}`);
+      persist('removeDep', { id, dep: depId });
     },
     addStatusUpdate: (id, narrative, by = 'ejackson') => {
       setMilestones(ms => ms.map(m => m.id === id ? {
@@ -181,6 +205,7 @@ function App() {
         statusUpdatedBy: by,
       } : m));
       pushEvent('work.status_updated', id, 'narrative_length=' + narrative.length);
+      persist('addStatusUpdate', { id, body: narrative });
     },
     addRisk: (id, body, severity = 'medium') => {
       setMilestones(ms => ms.map(m => m.id === id ? {
@@ -188,6 +213,7 @@ function App() {
         risks: [{ body, severity, by:'ejackson', when: today() }, ...(m.risks || [])],
       } : m));
       pushEvent('work.risk_recorded', id, 'severity=' + severity);
+      persist('addRisk', { id, body, severity, by: 'ejackson' });
     },
     addNextStep: (id, body, owner) => {
       setMilestones(ms => ms.map(m => m.id === id ? {
@@ -195,6 +221,7 @@ function App() {
         nextSteps: [{ body, owner, when: today() }, ...(m.nextSteps || [])],
       } : m));
       pushEvent('work.next_recorded', id, 'owner=' + owner);
+      persist('addNextStep', { id, body, owner });
     },
     commitAck: (id) => actions.acceptBoth(id),
     setAck: (id, who, action, note) => {
@@ -208,6 +235,7 @@ function App() {
       }));
       pushEvent(action === 'accepted' ? 'work.ack_accepted' : action === 'rejected' ? 'work.ack_rejected' : 'work.ack_cleared',
         id, `who=${who}`, who === 'specifier' ? 'achen' : 'dnasser');
+      persist('setAck', { id, who, ackAct: action, note });
     },
     updateAck: (id, patch) => {
       // Generic update for sheet edits on ACK columns; records history for each ACK field changed.
@@ -224,11 +252,12 @@ function App() {
         Object.assign(next, patch, { ackHistory: history });
         return next;
       }));
-      if (patch.specifierAck) pushEvent('work.ack_' + patch.specifierAck, id, 'who=specifier');
-      if (patch.builderAck)   pushEvent('work.ack_' + patch.builderAck, id, 'who=builder');
+      if (patch.specifierAck) { pushEvent('work.ack_' + patch.specifierAck, id, 'who=specifier'); persist('setAck', { id, who:'specifier', ackAct: patch.specifierAck }); }
+      if (patch.builderAck)   { pushEvent('work.ack_' + patch.builderAck, id, 'who=builder'); persist('setAck', { id, who:'builder', ackAct: patch.builderAck }); }
       if (patch.specifier || patch.builder || patch.target) {
         const k = Object.keys(patch)[0];
         pushEvent('work.field_updated', id, `field=${k}`);
+        persist('updateMilestone', { id, patch });
       }
     },
     acceptBoth: (id) => {
@@ -242,6 +271,7 @@ function App() {
         return { ...m, specifierAck:'accepted', builderAck:'accepted', ackHistory: hist };
       }));
       pushEvent('work.ack_accepted', id, 'who=both');
+      persist('acceptBoth', { id });
     },
     amendAck: (id) => {
       setMilestones(ms => ms.map(m => {
@@ -254,6 +284,7 @@ function App() {
         return { ...m, specifierAck:'pending', builderAck:'pending', ackHistory: hist, scopeChanges: (m.scopeChanges || 0) + 1 };
       }));
       pushEvent('work.ack_amended', id, 'type=scope_change · auto-cleared both ACKs');
+      persist('amendAck', { id, kind: 'scope_change' });
     },
   };
 
