@@ -820,7 +820,7 @@ func buildAckSheet(items []mcp.WorkItem) *web.SheetModel {
 
 // buildDecisionsSheet — DecisionBlocks with the prototype's idle-days colour
 // scale (≥9d red / ≥5d yellow / else green) + owner picker (§9 DecisionsView).
-func buildDecisionsSheet(items []mcp.WorkItem) *web.SheetModel {
+func buildDecisionsSheet(items []mcp.WorkItem, shared map[string]string) *web.SheetModel {
 	cols := []web.Column{
 		{Key: "id", Label: "ID", Width: 88, Frozen: true, Readonly: true},
 		{Key: "milestone", Label: "Milestone", Width: 120, Frozen: true, Readonly: true},
@@ -835,7 +835,7 @@ func buildDecisionsSheet(items []mcp.WorkItem) *web.SheetModel {
 		idle := idleDays(it)
 		rows = append(rows, web.Row{ID: rowID(it), Cells: map[string]web.Cell{
 			"id":        {HTML: idCell(rowID(it))},
-			"milestone": {HTML: milestoneRef(parentMilestone(it))},
+			"milestone": {HTML: milestoneRef(resolveShared(shared, parentMilestone(it)))},
 			"summary":   {Raw: truncate(firstNonEmpty(it.Title, it.Body), 120)},
 			"status":    {HTML: statusPill(it.Status)},
 			"owner":     {HTML: actorCell(roleActor(it, "owner"))},
@@ -848,7 +848,7 @@ func buildDecisionsSheet(items []mcp.WorkItem) *web.SheetModel {
 
 // buildOutcomesSheet — OutcomeAssessments with verdict / value / SLA-due
 // (§9 OutcomesView).
-func buildOutcomesSheet(items []mcp.WorkItem) *web.SheetModel {
+func buildOutcomesSheet(items []mcp.WorkItem, shared map[string]string) *web.SheetModel {
 	cols := []web.Column{
 		{Key: "id", Label: "ID", Width: 88, Frozen: true, Readonly: true},
 		{Key: "milestone", Label: "Milestone", Width: 120, Frozen: true, Readonly: true},
@@ -863,7 +863,7 @@ func buildOutcomesSheet(items []mcp.WorkItem) *web.SheetModel {
 	for _, it := range items {
 		rows = append(rows, web.Row{ID: rowID(it), Cells: map[string]web.Cell{
 			"id":        {HTML: idCell(rowID(it))},
-			"milestone": {HTML: milestoneRef(parentMilestone(it))},
+			"milestone": {HTML: milestoneRef(resolveShared(shared, parentMilestone(it)))},
 			"status":    {HTML: statusPill(it.Status)},
 			"due":       {HTML: monoDay(it.Field("sla_due"))},
 			"verdict":   {HTML: verdictPill(it.Field("verdict"))},
@@ -956,6 +956,25 @@ func roleVariant(role string) string {
 }
 
 // --- small cell helpers for the methodology sheets ---
+
+// sharedIDs builds a raw-work-item-id → shared-id resolver from a milestone
+// list, so decision/outcome milestone references render as REDEMO-1 not wrk_….
+func sharedIDs(milestones []mcp.WorkItem) map[string]string {
+	m := map[string]string{}
+	for _, w := range milestones {
+		m[w.ID] = rowID(w)
+		m[rowID(w)] = rowID(w)
+	}
+	return m
+}
+
+// resolveShared maps a raw work-item id to its shared id, or returns it as-is.
+func resolveShared(shared map[string]string, id string) string {
+	if s, ok := shared[id]; ok {
+		return s
+	}
+	return id
+}
 
 func milestoneRef(id string) template.HTML {
 	if id == "" {

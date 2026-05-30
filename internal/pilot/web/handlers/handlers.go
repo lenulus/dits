@@ -217,7 +217,7 @@ func (s *Server) Decisions(w http.ResponseWriter, r *http.Request) {
 			p.Body = errBody(err)
 			return
 		}
-		p.Sheet = buildDecisionsSheet(items)
+		p.Sheet = buildDecisionsSheet(items, sharedIDs(s.milestones(ctx)))
 		p.Counters = fmt.Sprintf("%d decisions", len(items))
 		if open := r.URL.Query().Get("open"); open != "" {
 			if item, err := s.Client.WorkGet(ctx, open); err == nil {
@@ -239,7 +239,7 @@ func (s *Server) Outcomes(w http.ResponseWriter, r *http.Request) {
 			p.Body = errBody(err)
 			return
 		}
-		p.Sheet = buildOutcomesSheet(items)
+		p.Sheet = buildOutcomesSheet(items, sharedIDs(s.milestones(ctx)))
 		p.Counters = fmt.Sprintf("%d assessments", len(items))
 		if open := r.URL.Query().Get("open"); open != "" {
 			if item, err := s.Client.WorkGet(ctx, open); err == nil {
