@@ -3,6 +3,25 @@
    Sits on top of ds/shared.css + ds/colors_and_type.css.
    ============================================================ */
 
+/* The prototype toggled visibility by mounting/unmounting React nodes; the
+   server-rendered port keeps elements in the DOM and toggles the [hidden]
+   attribute via JS/HTMX. Several component rules set `display:` on the class
+   (e.g. .flt-pop, .rx-bulkbar, in-cell editors), which outranks the low-
+   specificity UA `[hidden]{display:none}` rule and leaks them open on load.
+   Make the attribute authoritative everywhere. */
+[hidden] { display: none !important; }
+
+/* Anchors used as buttons (`<a class="rx-btn ...">` for tabs, row actions,
+   spawn links) must not inherit the global `.rx-base a` link colour + underline
+   — that turned ghost tabs blue and made the active accent tab's label
+   invisible (blue-on-blue). Restore the button variant colours for anchors. */
+.rx-base a.rx-btn { border-bottom: none; }
+.rx-base a.rx-btn--accent { color: #FFF; }
+.rx-base a.rx-btn--primary { color: var(--surface); }
+.rx-base a.rx-btn--ghost,
+.rx-base a.rx-btn--secondary { color: var(--ink-1); }
+.rx-base a.rx-btn--danger { color: #fff; }
+
 /* ---------- Sheet wrapper ---------- */
 .sht-wrap {
   position: relative;
