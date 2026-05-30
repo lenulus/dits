@@ -202,7 +202,9 @@
       });
     });
 
-    paint();
+    // No initial paint(): the focus ring (a heavy inset border, doubly so on
+    // the inline-editable title cell) should only appear once the user moves
+    // with the keyboard or clicks — matching the prototype's clean load.
   }
 
   /* ---- toolbar: preset / group-by Pivots + filter chips ---- */
