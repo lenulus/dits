@@ -75,6 +75,32 @@ func ValidateEvent(e Event, meta *MetaConfig) error {
 		if !meta.HasRelationType(p.RelationType) {
 			return fmt.Errorf("unknown relation type %q", p.RelationType)
 		}
+
+	case EventWorkClassified, EventWorkDeclassified:
+		var p ClassificationPayload
+		if err := json.Unmarshal(e.Payload, &p); err != nil {
+			return err
+		}
+		if !meta.HasTaxonomy(p.TaxonomySlug) {
+			return fmt.Errorf("unknown taxonomy %q", p.TaxonomySlug)
+		}
+		// The node must exist; for new classifications it must also be active.
+		if e.Type == EventWorkClassified {
+			if !meta.TaxonomyHasActiveNode(p.TaxonomySlug, p.NodeSlug) {
+				return fmt.Errorf("unknown or retired node %q in taxonomy %q", p.NodeSlug, p.TaxonomySlug)
+			}
+		} else if !meta.TaxonomyHasNode(p.TaxonomySlug, p.NodeSlug) {
+			return fmt.Errorf("unknown node %q in taxonomy %q", p.NodeSlug, p.TaxonomySlug)
+		}
+
+	case EventWorkRoleBound, EventWorkRoleUnbound:
+		var p RoleBindingPayload
+		if err := json.Unmarshal(e.Payload, &p); err != nil {
+			return err
+		}
+		if !meta.HasRole(p.RoleSlug) {
+			return fmt.Errorf("unknown role %q", p.RoleSlug)
+		}
 	}
 
 	return nil

@@ -36,6 +36,10 @@ func Reduce(events []Event) (*WorkItem, error) {
 		Attempts:     []ExecutionAttempt{},
 		Evals:        []Eval{},
 		Outcomes:     []Outcome{},
+
+		Classifications: []Classification{},
+		RoleBindings:    []RoleBinding{},
+		Diagnostics:     []Diagnostic{},
 	}
 
 	for _, e := range events {
@@ -557,6 +561,50 @@ func ApplyEvent(wi *WorkItem, e Event) error {
 		}
 		wi.Artifacts = removeArtifact(wi.Artifacts, p.ArtifactID)
 		wi.UpdatedAt = maxTime(wi.UpdatedAt, e.Timestamp)
+
+	// --- Classification / Roles (RE substrate) ---
+
+	case EventWorkClassified:
+		var p ClassificationPayload
+		if err := json.Unmarshal(e.Payload, &p); err != nil {
+			return err
+		}
+		c := Classification{TaxonomySlug: p.TaxonomySlug, NodeSlug: p.NodeSlug}
+		if !containsClassification(wi.Classifications, c) {
+			wi.Classifications = append(wi.Classifications, c)
+		}
+		wi.UpdatedAt = maxTime(wi.UpdatedAt, e.Timestamp)
+
+	case EventWorkDeclassified:
+		var p ClassificationPayload
+		if err := json.Unmarshal(e.Payload, &p); err != nil {
+			return err
+		}
+		wi.Classifications = removeClassification(wi.Classifications,
+			Classification{TaxonomySlug: p.TaxonomySlug, NodeSlug: p.NodeSlug})
+		wi.UpdatedAt = maxTime(wi.UpdatedAt, e.Timestamp)
+
+	case EventWorkRoleBound:
+		var p RoleBindingPayload
+		if err := json.Unmarshal(e.Payload, &p); err != nil {
+			return err
+		}
+		// Re-binding the same role replaces the actor; this models cardinality
+		// at materialization without rejecting the event.
+		if rb := findRoleBinding(wi.RoleBindings, p.RoleSlug); rb != nil {
+			rb.Actor = p.Actor
+		} else {
+			wi.RoleBindings = append(wi.RoleBindings, RoleBinding{RoleSlug: p.RoleSlug, Actor: p.Actor})
+		}
+		wi.UpdatedAt = maxTime(wi.UpdatedAt, e.Timestamp)
+
+	case EventWorkRoleUnbound:
+		var p RoleBindingPayload
+		if err := json.Unmarshal(e.Payload, &p); err != nil {
+			return err
+		}
+		wi.RoleBindings = removeRoleBinding(wi.RoleBindings, p.RoleSlug, p.Actor)
+		wi.UpdatedAt = maxTime(wi.UpdatedAt, e.Timestamp)
 	}
 
 	return nil
@@ -691,6 +739,44 @@ func removeRelation(s []Relation, r Relation) []Relation {
 	result := make([]Relation, 0, len(s))
 	for _, x := range s {
 		if !(x.Type == r.Type && x.TargetWorkItem == r.TargetWorkItem) {
+			result = append(result, x)
+		}
+	}
+	return result
+}
+
+func containsClassification(s []Classification, c Classification) bool {
+	for _, x := range s {
+		if x.TaxonomySlug == c.TaxonomySlug && x.NodeSlug == c.NodeSlug {
+			return true
+		}
+	}
+	return false
+}
+
+func removeClassification(s []Classification, c Classification) []Classification {
+	result := make([]Classification, 0, len(s))
+	for _, x := range s {
+		if !(x.TaxonomySlug == c.TaxonomySlug && x.NodeSlug == c.NodeSlug) {
+			result = append(result, x)
+		}
+	}
+	return result
+}
+
+func findRoleBinding(s []RoleBinding, roleSlug string) *RoleBinding {
+	for i := range s {
+		if s[i].RoleSlug == roleSlug {
+			return &s[i]
+		}
+	}
+	return nil
+}
+
+func removeRoleBinding(s []RoleBinding, roleSlug string, actor ActorID) []RoleBinding {
+	result := make([]RoleBinding, 0, len(s))
+	for _, x := range s {
+		if !(x.RoleSlug == roleSlug && x.Actor == actor) {
 			result = append(result, x)
 		}
 	}

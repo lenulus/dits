@@ -481,6 +481,25 @@ func (w *WorkOps) Unlink(ctx context.Context, id domain.WorkItemID, relationType
 	return w.simpleEvent(ctx, id, domain.EventWorkUnlinked, domain.RelationPayload{RelationType: relationType, TargetWorkItem: target}, false)
 }
 
+// Classify places a work item within a taxonomy node. withMeta=true so the
+// taxonomy/node references are validated against the current meta.
+func (w *WorkOps) Classify(ctx context.Context, id domain.WorkItemID, taxonomySlug, nodeSlug string) (*domain.WorkItem, error) {
+	return w.simpleEvent(ctx, id, domain.EventWorkClassified, domain.ClassificationPayload{TaxonomySlug: taxonomySlug, NodeSlug: nodeSlug}, true)
+}
+
+func (w *WorkOps) Declassify(ctx context.Context, id domain.WorkItemID, taxonomySlug, nodeSlug string) (*domain.WorkItem, error) {
+	return w.simpleEvent(ctx, id, domain.EventWorkDeclassified, domain.ClassificationPayload{TaxonomySlug: taxonomySlug, NodeSlug: nodeSlug}, true)
+}
+
+// BindRole binds an actor to a named role on a work item.
+func (w *WorkOps) BindRole(ctx context.Context, id domain.WorkItemID, roleSlug string, actor domain.ActorID) (*domain.WorkItem, error) {
+	return w.simpleEvent(ctx, id, domain.EventWorkRoleBound, domain.RoleBindingPayload{RoleSlug: roleSlug, Actor: actor}, true)
+}
+
+func (w *WorkOps) UnbindRole(ctx context.Context, id domain.WorkItemID, roleSlug string, actor domain.ActorID) (*domain.WorkItem, error) {
+	return w.simpleEvent(ctx, id, domain.EventWorkRoleUnbound, domain.RoleBindingPayload{RoleSlug: roleSlug, Actor: actor}, true)
+}
+
 // AttachResult carries the resulting work item plus allocated artifact metadata.
 type AttachResult struct {
 	WorkItem   *domain.WorkItem

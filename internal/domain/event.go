@@ -115,6 +115,15 @@ const (
 	EventWorkArtifactRemoved EventType = "work.artifact_removed"
 )
 
+// --- RE Substrate (generic): classification & role bindings ---
+
+const (
+	EventWorkClassified   EventType = "work.classified"
+	EventWorkDeclassified EventType = "work.declassified"
+	EventWorkRoleBound    EventType = "work.role_bound"
+	EventWorkRoleUnbound  EventType = "work.role_unbound"
+)
+
 // Event is an immutable record of a state change in the system.
 type Event struct {
 	ID             EventID         `json:"id"`
@@ -393,6 +402,22 @@ type ArtifactAddedPayload struct {
 
 type ArtifactRemovedPayload struct {
 	ArtifactID ArtifactID `json:"artifact_id"`
+}
+
+// --- RE Substrate Payloads ---
+
+// ClassificationPayload is shared by classified & declassified, mirroring how
+// RelationPayload serves both linked & unlinked.
+type ClassificationPayload struct {
+	TaxonomySlug string `json:"taxonomy_slug"`
+	NodeSlug     string `json:"node_slug"`
+}
+
+// RoleBindingPayload is shared by role_bound & role_unbound.
+type RoleBindingPayload struct {
+	RoleSlug string  `json:"role_slug"`
+	Actor    ActorID `json:"actor_id"`
+	Scope    string  `json:"scope,omitempty"`
 }
 
 // MustMarshalPayload marshals a payload to JSON, panicking on error.

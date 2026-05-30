@@ -65,8 +65,34 @@ type WorkItem struct {
 	Evals        []Eval
 	Outcomes     []Outcome
 
+	// Classification & role coordination (RE substrate).
+	Classifications []Classification
+	RoleBindings    []RoleBinding
+	// Diagnostics are populated externally by the constraints engine, not by
+	// Reduce — the domain package must not import constraints.
+	Diagnostics []Diagnostic
+
 	EventCount int
 	HeadEvents []EventID
+}
+
+// Classification places a work item within a node of a taxonomy.
+type Classification struct {
+	TaxonomySlug string
+	NodeSlug     string
+}
+
+// RoleBinding binds an actor to a named role on a work item.
+type RoleBinding struct {
+	RoleSlug string
+	Actor    ActorID
+}
+
+// Diagnostic is an advisory finding produced by the constraints engine.
+type Diagnostic struct {
+	ConstraintSlug string
+	Severity       string // "warning" | "violation"
+	Message        string
 }
 
 // Comment on a work item.

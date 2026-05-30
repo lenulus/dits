@@ -1,6 +1,9 @@
 package domain
 
-import "fmt"
+import (
+	"encoding/json"
+	"fmt"
+)
 
 // MetaConfig defines the project's structured vocabulary and coordination policies.
 type MetaConfig struct {
@@ -23,6 +26,12 @@ type MetaConfig struct {
 	// Policies
 	LeasePolicies  []LeasePolicy  `json:"lease_policies"`
 	ReviewPolicies []ReviewPolicy `json:"review_policies"`
+
+	// Classification & role coordination (RE substrate). These are applied by
+	// methodology packs (e.g. Pilot), not baked into DefaultMetaConfig.
+	Taxonomies      []Taxonomy       `json:"taxonomies,omitempty"`
+	Roles           []Role           `json:"roles,omitempty"`
+	RoleConstraints []RoleConstraint `json:"role_constraints,omitempty"`
 }
 
 type Label struct {
@@ -84,6 +93,47 @@ type LeasePolicy struct {
 type ReviewPolicy struct {
 	WorkKindSlug    string `json:"work_kind_slug"`
 	RequiredReviews int    `json:"required_reviews"`
+}
+
+// --- Classification & roles (RE substrate) ---
+
+// Taxonomy is a named hierarchy of nodes that work items can be classified
+// into (e.g. an org chart, a product tree, a goal tree).
+type Taxonomy struct {
+	Slug        string         `json:"slug"`         // e.g. "org"
+	Name        string         `json:"name"`         // "Organization"
+	Description string         `json:"description,omitempty"`
+	Levels      []string       `json:"levels,omitempty"` // advisory naming: ["org", "node", "team"]
+	Nodes       []TaxonomyNode `json:"nodes"`
+}
+
+// TaxonomyNode is a single node within a taxonomy. Slugs are path-like and
+// stable; ParentSlug references another node in the same taxonomy.
+type TaxonomyNode struct {
+	Slug       string          `json:"slug"` // "acme/platform/payments-team"
+	Name       string          `json:"name"`
+	ParentSlug string          `json:"parent_slug,omitempty"`
+	Metadata   json.RawMessage `json:"metadata,omitempty"`
+	Retired    bool            `json:"retired,omitempty"`
+}
+
+// Role is a named position an actor can be bound to on a work item.
+type Role struct {
+	Slug        string `json:"slug"` // "pilot"
+	Name        string `json:"name"` // "Pilot"
+	Description string `json:"description,omitempty"`
+	Cardinality string `json:"cardinality"` // "exactly_one" | "at_most_one" | "many"
+}
+
+// RoleConstraint is a coordination policy evaluated against a materialized
+// work item's role bindings and classifications. Constraints are advisory:
+// they produce diagnostics, never reject events.
+type RoleConstraint struct {
+	Slug      string         `json:"slug"` // "pilot_independence"
+	Name      string         `json:"name"`
+	Predicate string         `json:"predicate"` // see internal/constraints
+	Args      map[string]any `json:"args,omitempty"`
+	Severity  string         `json:"severity"` // "warning" | "violation"
 }
 
 // --- Validation ---
@@ -176,6 +226,58 @@ func (m *MetaConfig) HasRelationType(slug string) bool {
 		}
 	}
 	return false
+}
+
+func (m *MetaConfig) HasTaxonomy(slug string) bool {
+	return m.GetTaxonomy(slug) != nil
+}
+
+func (m *MetaConfig) GetTaxonomy(slug string) *Taxonomy {
+	for i := range m.Taxonomies {
+		if m.Taxonomies[i].Slug == slug {
+			return &m.Taxonomies[i]
+		}
+	}
+	return nil
+}
+
+func (m *MetaConfig) GetTaxonomyNode(taxSlug, nodeSlug string) *TaxonomyNode {
+	tx := m.GetTaxonomy(taxSlug)
+	if tx == nil {
+		return nil
+	}
+	for i := range tx.Nodes {
+		if tx.Nodes[i].Slug == nodeSlug {
+			return &tx.Nodes[i]
+		}
+	}
+	return nil
+}
+
+// TaxonomyHasNode reports whether the node exists in the taxonomy,
+// regardless of retirement.
+func (m *MetaConfig) TaxonomyHasNode(taxSlug, nodeSlug string) bool {
+	return m.GetTaxonomyNode(taxSlug, nodeSlug) != nil
+}
+
+// TaxonomyHasActiveNode reports whether the node exists and is not retired.
+// New classifications must target an active node.
+func (m *MetaConfig) TaxonomyHasActiveNode(taxSlug, nodeSlug string) bool {
+	n := m.GetTaxonomyNode(taxSlug, nodeSlug)
+	return n != nil && !n.Retired
+}
+
+func (m *MetaConfig) HasRole(slug string) bool {
+	return m.GetRole(slug) != nil
+}
+
+func (m *MetaConfig) GetRole(slug string) *Role {
+	for i := range m.Roles {
+		if m.Roles[i].Slug == slug {
+			return &m.Roles[i]
+		}
+	}
+	return nil
 }
 
 func (m *MetaConfig) GetWorkflowForKind(kindSlug string) *Workflow {
@@ -287,6 +389,35 @@ func (m *MetaConfig) AddRelationType(rt RelationType) error {
 		return fmt.Errorf("relation type %q already exists", rt.Slug)
 	}
 	m.RelationTypes = append(m.RelationTypes, rt)
+	m.Version++
+	return nil
+}
+
+func (m *MetaConfig) AddTaxonomy(t Taxonomy) error {
+	if m.HasTaxonomy(t.Slug) {
+		return fmt.Errorf("taxonomy %q already exists", t.Slug)
+	}
+	m.Taxonomies = append(m.Taxonomies, t)
+	m.Version++
+	return nil
+}
+
+func (m *MetaConfig) AddRole(r Role) error {
+	if m.HasRole(r.Slug) {
+		return fmt.Errorf("role %q already exists", r.Slug)
+	}
+	m.Roles = append(m.Roles, r)
+	m.Version++
+	return nil
+}
+
+func (m *MetaConfig) AddRoleConstraint(c RoleConstraint) error {
+	for _, existing := range m.RoleConstraints {
+		if existing.Slug == c.Slug {
+			return fmt.Errorf("role constraint %q already exists", c.Slug)
+		}
+	}
+	m.RoleConstraints = append(m.RoleConstraints, c)
 	m.Version++
 	return nil
 }
