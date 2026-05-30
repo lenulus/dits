@@ -9,8 +9,10 @@ import (
 	"html/template"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/lenulus/pf/internal/pilot/mcp"
+	"github.com/lenulus/pf/internal/pilot/projections"
 	"github.com/lenulus/pf/internal/pilot/web"
 )
 
@@ -311,8 +313,35 @@ func buildAttentionBody(items []mcp.WorkItem, me string) template.HTML {
 	return template.HTML(b.String())
 }
 
-// buildLeadershipBody renders the in-flight milestone table (the indicator row
-// + pattern blocks land with Phase 6.3 projections).
+// buildIndicatorRow renders the four RE leading indicators (§9.2 KPI row)
+// from the projection cache.
+func buildIndicatorRow(ind projections.Indicators) template.HTML {
+	card := func(label, value, unit string) string {
+		return fmt.Sprintf(
+			`<div style="background:var(--surface);border:1px solid var(--hairline);border-radius:5px;padding:12px 14px;box-shadow:var(--shadow-1)">`+
+				`<div style="font-family:var(--font-mono);font-size:10px;letter-spacing:0.08em;text-transform:uppercase;color:var(--ink-3)">%s</div>`+
+				`<div style="font-family:var(--font-display);font-size:24px;font-weight:600;color:var(--ink-0);margin-top:4px">%s<span style="font-size:12px;color:var(--ink-3);font-weight:400"> %s</span></div>`+
+				`</div>`,
+			template.HTMLEscapeString(label), template.HTMLEscapeString(value), template.HTMLEscapeString(unit))
+	}
+	days := func(d time.Duration) string {
+		if d <= 0 {
+			return "—"
+		}
+		return fmt.Sprintf("%.1f", d.Hours()/24)
+	}
+	var b strings.Builder
+	b.WriteString(`<div class="kpi-row">`)
+	b.WriteString(card("Dependency closure", fmt.Sprintf("%.0f", ind.DependencyClosureRate*100), "%"))
+	b.WriteString(card("Scope-change velocity", fmt.Sprintf("%.2f", ind.ScopeChangeVelocity), "/wk"))
+	b.WriteString(card("Decision friction", days(ind.DecisionBlockFriction), "d"))
+	b.WriteString(card("ACK-to-start latency", days(ind.AckToStartLatency), "d"))
+	b.WriteString(`</div>`)
+	return template.HTML(b.String())
+}
+
+// buildLeadershipBody renders the in-flight milestone table (pattern blocks
+// land alongside the indicator projections).
 func buildLeadershipBody(items []mcp.WorkItem) template.HTML {
 	inflight := make([]mcp.WorkItem, 0)
 	for _, m := range items {
@@ -332,7 +361,7 @@ func buildLeadershipBody(items []mcp.WorkItem) template.HTML {
 			template.HTMLEscapeString(rowID(m)), template.HTMLEscapeString(m.Title),
 			rollupPill(rollup), actorCell(roleActor(m, "pilot")), statusPill(m.Status))
 	}
-	b.WriteString(`</tbody></table></div><div class="empty-line" style="margin-top:14px">The four leading indicators + pattern blocks land with the Pilot projection cache (Phase 6.3).</div>`)
+	b.WriteString(`</tbody></table></div>`)
 	return template.HTML(b.String())
 }
 

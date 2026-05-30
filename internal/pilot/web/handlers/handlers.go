@@ -20,17 +20,21 @@ import (
 	"strings"
 
 	"github.com/lenulus/pf/internal/pilot/mcp"
+	"github.com/lenulus/pf/internal/pilot/projections"
 	"github.com/lenulus/pf/internal/pilot/web"
 )
 
-// Server carries the dependencies the route handlers need — today just the
-// typed MCP client. Future: session/auth middleware, the projection cache.
+// Server carries the dependencies the route handlers need: the typed MCP
+// client and the in-memory indicator cache. Future: session/auth middleware.
 type Server struct {
-	Client mcp.Client
+	Client     mcp.Client
+	Indicators *projections.Cache
 }
 
 // New returns a Server backed by the given MCP client.
-func New(client mcp.Client) *Server { return &Server{Client: client} }
+func New(client mcp.Client) *Server {
+	return &Server{Client: client, Indicators: projections.NewCache()}
+}
 
 // Register wires the twelve UI routes, the default-landing redirect, and the
 // embedded static-asset mount onto mux.
@@ -103,11 +107,17 @@ func (s *Server) ForYou(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// Leadership serves GET /leadership — portfolio rollup (§9.2).
+// Leadership serves GET /leadership — portfolio rollup + the four leading
+// indicators (§9.2). The indicator cache is rebuilt on each load; a later
+// pass invalidates it on write instead (§10.3).
 func (s *Server) Leadership(w http.ResponseWriter, r *http.Request) {
 	items := s.milestones(r.Context())
+	var ind projections.Indicators
+	if err := s.Indicators.Rebuild(r.Context(), s.Client); err == nil {
+		ind, _ = s.Indicators.Get()
+	}
 	renderLayout(w, "leadership", func(p *web.Page) {
-		p.Body = buildLeadershipBody(items)
+		p.Body = buildIndicatorRow(ind) + buildLeadershipBody(items)
 	})
 }
 
