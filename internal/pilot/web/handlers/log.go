@@ -39,8 +39,14 @@ func buildLogBody(events []mcp.Event, milestones []mcp.WorkItem) template.HTML {
 	if len(events) == 0 {
 		b.WriteString(`<div class="empty-line">No journal entries yet. File the first one above — specific is kind.</div>`)
 	}
+	// Resolve raw work-item IDs in events to the human shared ID for the chip.
+	shared := map[string]string{}
+	for _, m := range milestones {
+		shared[m.ID] = rowID(m)
+		shared[rowID(m)] = rowID(m)
+	}
 	for _, e := range events {
-		b.WriteString(string(renderLogEntry(e)))
+		b.WriteString(string(renderLogEntryResolved(e, shared)))
 	}
 	b.WriteString(`</div>`)
 	return template.HTML(b.String())
@@ -80,13 +86,21 @@ func logQuickEntry(milestones []mcp.WorkItem) template.HTML {
 
 // renderLogEntry renders one journal feed row from an observation event: a kind
 // chip + milestone chip + the entry body, mirroring the prototype's LogEntry.
-func renderLogEntry(e mcp.Event) template.HTML {
+func renderLogEntry(e mcp.Event) template.HTML { return renderLogEntryResolved(e, nil) }
+
+// renderLogEntryResolved renders one journal row; shared maps a raw work-item
+// ID to its human shared ID for the milestone chip (nil → show as-is).
+func renderLogEntryResolved(e mcp.Event, shared map[string]string) template.HTML {
 	kind, body := observationKindBody(e)
+	mile := e.WorkItemID
+	if s, ok := shared[mile]; ok {
+		mile = s
+	}
 	return template.HTML(fmt.Sprintf(
-		`<div class="log-entry" style="display:flex;gap:10px;padding:11px 14px;border-bottom:1px solid var(--hairline)"><span class="log-entry__meta" style="display:flex;flex-direction:column;gap:3px;min-width:96px"><span class="dx-id">%s</span><span style="font-family:var(--font-mono);font-size:9.5px;color:var(--ink-4)">%s</span></span><span style="flex:1;min-width:0"><span style="display:inline-block;font-family:var(--font-mono);font-size:10px;padding:1px 6px;margin-right:8px;color:var(--accent);border:1px solid var(--accent-rule);border-radius:3px;vertical-align:1px">%s</span>%s%s</span></div>`,
-		template.HTMLEscapeString(e.ActorID),
+		`<div class="log-entry" style="display:flex;gap:10px;padding:11px 14px;border-bottom:1px solid var(--hairline)"><span class="log-entry__meta" style="display:flex;align-items:center;gap:6px;min-width:96px">%s<span style="font-family:var(--font-mono);font-size:9.5px;color:var(--ink-4)">%s</span></span><span style="flex:1;min-width:0"><span style="display:inline-block;font-family:var(--font-mono);font-size:10px;padding:1px 6px;margin-right:8px;color:var(--accent);border:1px solid var(--accent-rule);border-radius:3px;vertical-align:1px">%s</span>%s%s</span></div>`,
+		avatarHTML(e.ActorID),
 		template.HTMLEscapeString(shortDayLocal(e.Timestamp)),
-		template.HTMLEscapeString(e.WorkItemID),
+		template.HTMLEscapeString(mile),
 		logKindChip(kind),
 		template.HTMLEscapeString(body)))
 }
