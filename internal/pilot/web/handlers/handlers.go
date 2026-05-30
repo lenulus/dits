@@ -275,13 +275,15 @@ func (s *Server) Taxonomies(w http.ResponseWriter, r *http.Request) {
 
 // Events serves GET /events — the read-only signed event log.
 func (s *Server) Events(w http.ResponseWriter, r *http.Request) {
-	events, err := s.Client.EventsList(r.Context(), "", "", 200)
+	ctx := r.Context()
+	events, err := s.Client.EventsList(ctx, "", "", 200)
+	all, _ := s.Client.WorkList(ctx, mcp.Filters{}) // resolve event targets to shared ids
 	renderLayout(w, "events", func(p *web.Page) {
 		if err != nil {
 			p.Body = errBody(err)
 			return
 		}
-		p.Body = buildEventsBody(events)
+		p.Body = buildEventsBody(events, sharedIDs(all))
 		p.Counters = fmt.Sprintf("%d recent events", len(events))
 	})
 }

@@ -5,6 +5,7 @@
 package handlers
 
 import (
+	"encoding/json"
 	"fmt"
 	"html/template"
 	"strings"
@@ -14,21 +15,115 @@ import (
 	"github.com/lenulus/pf/internal/pilot/projections"
 )
 
-// buildEventsBody renders the read-only signed event log (EventLogView).
-func buildEventsBody(events []mcp.Event) template.HTML {
+// buildEventsBody renders the read-only signed event log (EventLogView): the
+// prototype's 6-column grid — §seq · type · target · payload · actor · time.
+// shared resolves a raw work-item id to its human shared id; nil → as-is.
+func buildEventsBody(events []mcp.Event, shared map[string]string) template.HTML {
 	var b strings.Builder
 	b.WriteString(`<div style="background:var(--surface);border:1px solid var(--hairline);border-radius:5px;box-shadow:var(--shadow-1)">`)
-	b.WriteString(`<div class="evt-row" style="background:var(--paper-2);border-bottom:1px solid var(--hairline-strong);font-family:var(--font-mono);font-size:9.5px;color:var(--ink-3);text-transform:uppercase;letter-spacing:0.1em;font-weight:500"><span>Type</span><span>Target</span><span>Actor</span><span style="text-align:right">Time</span></div>`)
-	for _, e := range events {
+	b.WriteString(`<div class="evt-row" style="background:var(--paper-2);border-bottom:1px solid var(--hairline-strong);font-family:var(--font-mono);font-size:9.5px;color:var(--ink-3);text-transform:uppercase;letter-spacing:0.1em;font-weight:500"><span>§</span><span>Type</span><span>Target</span><span>Payload</span><span>Actor</span><span style="text-align:right">Time</span></div>`)
+	n := len(events)
+	for i, e := range events {
+		target := e.WorkItemID
+		if s, ok := shared[target]; ok {
+			target = s
+		}
 		fmt.Fprintf(&b,
-			`<div class="evt-row"><span class="typ">%s</span><span class="tgt">%s</span><span>%s</span><span class="tim">%s</span></div>`,
-			template.HTMLEscapeString(e.Type),
-			template.HTMLEscapeString(e.WorkItemID),
-			template.HTMLEscapeString(e.ActorID),
-			template.HTMLEscapeString(e.Timestamp))
+			`<div class="evt-row"><span class="sec">§%d</span><span class="typ">%s</span><span class="tgt">%s</span><span class="pay">%s</span><span style="display:inline-flex;align-items:center;gap:6px">%s<span class="sig">%s</span></span><span class="tim">%s</span></div>`,
+			n-i,
+			template.HTMLEscapeString(string(e.Type)),
+			template.HTMLEscapeString(target),
+			template.HTMLEscapeString(eventPayloadSummary(e)),
+			avatarHTML(e.ActorID),
+			template.HTMLEscapeString(shortSig(e.ID)),
+			template.HTMLEscapeString(shortTime(e.Timestamp)))
 	}
 	b.WriteString(`</div>`)
 	return template.HTML(b.String())
+}
+
+// eventPayloadSummary decodes an event payload into the prototype's compact
+// "k=v · k=v" description, by type. Unknown types fall back to a trimmed JSON.
+func eventPayloadSummary(e mcp.Event) string {
+	var p map[string]any
+	if len(e.Payload) > 0 {
+		_ = json.Unmarshal(e.Payload, &p)
+	}
+	get := func(k string) string {
+		if v, ok := p[k]; ok {
+			return fmt.Sprintf("%v", v)
+		}
+		return ""
+	}
+	join := func(parts ...string) string {
+		var out []string
+		for _, s := range parts {
+			if s != "" {
+				out = append(out, s)
+			}
+		}
+		return strings.Join(out, " · ")
+	}
+	switch e.Type {
+	case "work.created":
+		return join(kv("kind", get("kind")), kv("title", get("title")))
+	case "work.field_set":
+		return join(kv("field", get("field")), kv("value", get("value")))
+	case "work.schedule_set":
+		if arr, ok := p["stages"].([]any); ok {
+			return fmt.Sprintf("%d stage%s", len(arr), plur(len(arr)))
+		}
+		return "stages set"
+	case "work.observation_recorded":
+		var d mcp.ObsData
+		summary, _ := p["summary"].(string)
+		if raw, ok := p["data"]; ok {
+			b, _ := json.Marshal(raw)
+			_ = json.Unmarshal(b, &d)
+		}
+		return join(kv("entry_type", d.EntryType), truncate(summary, 60))
+	case "work.classified", "work.declassified":
+		return join(kv("taxonomy", get("taxonomy_slug")), kv("node", get("node_slug")))
+	case "work.role_bound", "work.role_unbound":
+		return join(kv("role", get("role_slug")), kv("actor", get("actor_id")))
+	case "work.status_set":
+		return join(get("from"), "→ "+get("to"))
+	case "work.ack_filed":
+		return kv("scope", truncate(get("scope_summary"), 50))
+	case "work.ack_accepted", "work.ack_rejected", "work.ack_cleared":
+		return join(kv("who", get("who")), get("note"), get("reason"))
+	case "work.ack_amended":
+		return join(kv("type", get("amendment_type")), get("reason"))
+	case "work.linked", "work.unlinked":
+		return join(kv("rel", get("relation_type")), kv("target", get("target_work_item")))
+	case "work.review_requested":
+		return join(kv("reviewer", get("reviewer_role")), kv("scope", get("scope")))
+	}
+	s := strings.TrimSpace(string(e.Payload))
+	return truncate(strings.Trim(s, "{}"), 70)
+}
+
+func kv(k, v string) string {
+	if v == "" {
+		return ""
+	}
+	return k + "=" + v
+}
+
+// shortSig renders a short signature-ish suffix from the event id.
+func shortSig(id string) string {
+	if len(id) >= 8 {
+		return id[len(id)-8:]
+	}
+	return id
+}
+
+// shortTime trims an RFC3339 timestamp to "MM-DD HH:MM".
+func shortTime(ts string) string {
+	if len(ts) >= 16 {
+		return ts[5:16]
+	}
+	return ts
 }
 
 // buildIndicatorRow renders the four RE leading indicators (§9.2 KPI row)
