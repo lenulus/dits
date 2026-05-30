@@ -94,6 +94,88 @@ func TestDecodeWorkItem(t *testing.T) {
 	}
 }
 
+// projectionJSON is a realistic dits_work_show result carrying the Track-0
+// generic projection state: scalar Fields, a staged timeline, typed
+// observations (status/risk/next), and a derived_from lineage relation.
+const projectionJSON = `{
+  "ID": "wrk_01HQ",
+  "SharedID": "PROJ-204",
+  "Kind": "task",
+  "Title": "Recurring billing v1",
+  "Status": "open",
+  "Fields": {"ryg": "g", "target": "2026 Q3", "target_precision": "D", "customer_visible": "true"},
+  "Stages": [
+    {"Key": "beta", "Label": "Beta", "Date": "2026 Q3", "Precision": "Q", "State": "open"},
+    {"Key": "ga", "Label": "GA", "Date": "2026-09-30", "Precision": "D", "State": "open"}
+  ],
+  "Observations": [
+    {"Summary": "Older status.", "Data": {"entry_type": "status"}, "Timestamp": "2026-05-18T09:00:00Z"},
+    {"Summary": "Webhook IPv6 routes flaky.", "Data": {"entry_type": "risk", "severity": "medium", "by": "krivas"}, "Timestamp": "2026-05-18T10:00:00Z"},
+    {"Summary": "Cut Beta tag.", "Data": {"entry_type": "next", "owner": "dnasser"}, "Timestamp": "2026-05-19T08:00:00Z"},
+    {"Summary": "Two of three subsystems integrated.", "Data": {"entry_type": "status"}, "Timestamp": "2026-05-22T16:00:00Z"}
+  ],
+  "Relations": [
+    {"Type": "derived_from", "TargetWorkItem": "wrk_RFC"}
+  ]
+}`
+
+func TestDecodeProjection(t *testing.T) {
+	var wi WorkItem
+	if err := decodeResult(projectionJSON, &wi); err != nil {
+		t.Fatalf("decodeResult: %v", err)
+	}
+	if wi.RYG() != "g" {
+		t.Errorf("RYG() = %q, want g", wi.RYG())
+	}
+	if wi.Target() != "2026 Q3" {
+		t.Errorf("Target() = %q, want 2026 Q3", wi.Target())
+	}
+	if wi.TargetPrecision() != "D" {
+		t.Errorf("TargetPrecision() = %q, want D", wi.TargetPrecision())
+	}
+	if !wi.CustomerVisible() {
+		t.Errorf("CustomerVisible() = false, want true")
+	}
+	if len(wi.Stages) != 2 || wi.Stages[1].Key != "ga" {
+		t.Errorf("Stages wrong: %+v", wi.Stages)
+	}
+	// Latest status observation wins.
+	if wi.StatusNarrative() != "Two of three subsystems integrated." {
+		t.Errorf("StatusNarrative() = %q", wi.StatusNarrative())
+	}
+	if wi.StatusUpdatedAt() != "2026-05-22T16:00:00Z" {
+		t.Errorf("StatusUpdatedAt() = %q", wi.StatusUpdatedAt())
+	}
+	risks := wi.Risks()
+	if len(risks) != 1 || risks[0].Severity != "medium" || risks[0].By != "krivas" || risks[0].When != "2026-05-18" {
+		t.Errorf("Risks() wrong: %+v", risks)
+	}
+	next := wi.NextSteps()
+	if len(next) != 1 || next[0].Owner != "dnasser" || next[0].Body != "Cut Beta tag." {
+		t.Errorf("NextSteps() wrong: %+v", next)
+	}
+	if wi.FromRFC() != "wrk_RFC" {
+		t.Errorf("FromRFC() = %q, want wrk_RFC", wi.FromRFC())
+	}
+}
+
+// TestProjectionDefaults confirms a bare work item derives sane defaults.
+func TestProjectionDefaults(t *testing.T) {
+	var wi WorkItem
+	if err := decodeResult(`{"ID":"x","Kind":"task"}`, &wi); err != nil {
+		t.Fatalf("decodeResult: %v", err)
+	}
+	if wi.RYG() != "" || wi.Target() != "" || wi.CustomerVisible() {
+		t.Errorf("expected empty scalars, got ryg=%q target=%q vis=%v", wi.RYG(), wi.Target(), wi.CustomerVisible())
+	}
+	if wi.TargetPrecision() != "Q" {
+		t.Errorf("TargetPrecision() default = %q, want Q", wi.TargetPrecision())
+	}
+	if wi.StatusNarrative() != "" || len(wi.Risks()) != 0 || len(wi.NextSteps()) != 0 || wi.FromRFC() != "" {
+		t.Errorf("expected empty derived collections")
+	}
+}
+
 // roleBindingsJSON is a realistic dits_role_bindings_list result (a bare array).
 const roleBindingsJSON = `[
   {"RoleSlug": "specifier", "Actor": "ejackson"},

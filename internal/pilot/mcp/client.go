@@ -49,10 +49,164 @@ type WorkItem struct {
 	Acks            []Ack            `json:"Acks"`
 	Diagnostics     []Diagnostic     `json:"Diagnostics"`
 	Relations       []Relation       `json:"Relations"`
+	// Generic projection state set via work.field_set / work.schedule_set.
+	// DITS attaches no meaning to these; Pilot derives the RE methodology
+	// surface (RYG, target, risks, …) from them via the accessors below.
+	Fields       map[string]string `json:"Fields"`
+	Stages       []Stage           `json:"Stages"`
+	Observations []Observation     `json:"Observations"`
 	// Timestamps are RFC3339 strings (domain.WorkItem has no json tags, so
 	// these arrive PascalCase). Empty when the substrate omitted them.
 	CreatedAt string `json:"CreatedAt"`
 	UpdatedAt string `json:"UpdatedAt"`
+}
+
+// Stage is one entry of a work item's staged delivery timeline.
+type Stage struct {
+	Key       string `json:"Key"`
+	Label     string `json:"Label"`
+	Date      string `json:"Date"`
+	Precision string `json:"Precision"`
+	State     string `json:"State"`
+}
+
+// Observation is a materialized work.observation_recorded. Data is an opaque
+// blob; the RE methodology rides a typed discriminator in it (see ObsData).
+type Observation struct {
+	Summary   string          `json:"Summary"`
+	Data      json.RawMessage `json:"Data"`
+	Timestamp string          `json:"Timestamp"`
+}
+
+// ObsData is Pilot's convention for the opaque observation Data blob. The
+// entry_type discriminator partitions the journal into status / risk / next
+// entries. These names live ONLY in Pilot — DITS never interprets them.
+type ObsData struct {
+	EntryType string `json:"entry_type"` // status | risk | next | (else: a generic log kind)
+	Severity  string `json:"severity,omitempty"`
+	Owner     string `json:"owner,omitempty"`
+	By        string `json:"by,omitempty"`
+}
+
+// Risk is a derived high/medium/low concern (entry_type=risk observation).
+type Risk struct {
+	Body     string
+	Severity string
+	By       string
+	When     string
+}
+
+// NextStep is a derived planned action (entry_type=next observation).
+type NextStep struct {
+	Body  string
+	Owner string
+	When  string
+}
+
+// --- RE methodology projection (derived Pilot-side from Fields/Stages) ---
+//
+// These accessors interpret the generic substrate projection as the RE
+// methodology surface. The field-name conventions (ryg, target, …) live ONLY
+// here in Pilot — DITS never sees them. See re-pilot-completion-plan.md §2.
+
+// Field returns the raw scalar projection value for key, or "".
+func (w WorkItem) Field(key string) string {
+	if w.Fields == nil {
+		return ""
+	}
+	return w.Fields[key]
+}
+
+// RYG is the red/yellow/green health call (g | y | r), or "" if unset.
+func (w WorkItem) RYG() string { return w.Field("ryg") }
+
+// Target is the delivery target value (free-form: "2026 Q3", "2026-09-30", …).
+func (w WorkItem) Target() string { return w.Field("target") }
+
+// TargetPrecision is Q | M | D, defaulting to Q when unset.
+func (w WorkItem) TargetPrecision() string {
+	if p := w.Field("target_precision"); p != "" {
+		return p
+	}
+	return "Q"
+}
+
+// CustomerVisible reports whether this work item is on the public roadmap.
+func (w WorkItem) CustomerVisible() bool { return w.Field("customer_visible") == "true" }
+
+// typedObs returns observations whose Data.entry_type matches kind, newest
+// first (observations arrive oldest-first in the materialized slice).
+func (w WorkItem) typedObs(kind string) []Observation {
+	var out []Observation
+	for i := len(w.Observations) - 1; i >= 0; i-- {
+		o := w.Observations[i]
+		var d ObsData
+		if len(o.Data) > 0 {
+			_ = json.Unmarshal(o.Data, &d)
+		}
+		if d.EntryType == kind {
+			out = append(out, o)
+		}
+	}
+	return out
+}
+
+// StatusNarrative is the latest status paragraph (newest entry_type=status
+// observation's summary), or "".
+func (w WorkItem) StatusNarrative() string {
+	if xs := w.typedObs("status"); len(xs) > 0 {
+		return xs[0].Summary
+	}
+	return ""
+}
+
+// StatusUpdatedAt is the timestamp (RFC3339) of the latest status observation.
+func (w WorkItem) StatusUpdatedAt() string {
+	if xs := w.typedObs("status"); len(xs) > 0 {
+		return xs[0].Timestamp
+	}
+	return ""
+}
+
+// Risks lists the work item's open risks, newest first.
+func (w WorkItem) Risks() []Risk {
+	var out []Risk
+	for _, o := range w.typedObs("risk") {
+		var d ObsData
+		_ = json.Unmarshal(o.Data, &d)
+		out = append(out, Risk{Body: o.Summary, Severity: d.Severity, By: d.By, When: shortDay(o.Timestamp)})
+	}
+	return out
+}
+
+// NextSteps lists the work item's planned next steps, newest first.
+func (w WorkItem) NextSteps() []NextStep {
+	var out []NextStep
+	for _, o := range w.typedObs("next") {
+		var d ObsData
+		_ = json.Unmarshal(o.Data, &d)
+		out = append(out, NextStep{Body: o.Summary, Owner: d.Owner, When: shortDay(o.Timestamp)})
+	}
+	return out
+}
+
+// shortDay trims an RFC3339 timestamp to its date (YYYY-MM-DD).
+func shortDay(ts string) string {
+	if len(ts) >= 10 {
+		return ts[:10]
+	}
+	return ts
+}
+
+// FromRFC is the originating RFC id (lineage), derived from a derived_from
+// relation, or "".
+func (w WorkItem) FromRFC() string {
+	for _, r := range w.Relations {
+		if r.Type == "derived_from" {
+			return r.TargetWorkItem
+		}
+	}
+	return ""
 }
 
 // Relation links this work item to another (depends_on, relates_to, …).
@@ -255,10 +409,19 @@ type Client interface {
 	AckReject(ctx context.Context, id, who, note string) error
 	AckAmend(ctx context.Context, id, amendmentType string, fields []string, reason string) error
 
+	// Generic projection (methodology state). FieldSet writes a scalar
+	// projection field (ryg/target/…); ScheduleSet replaces the staged
+	// timeline; Observe records a (typed) journal entry — status/risk/next
+	// ride here via the opaque data blob.
+	FieldSet(ctx context.Context, id, field, value string) error
+	ScheduleSet(ctx context.Context, id string, stages []Stage) error
+	Observe(ctx context.Context, id, summary string, data json.RawMessage) error
+
 	// Lifecycle mutations (used by the scheduler and the mutation UI).
 	WorkCreate(ctx context.Context, kind, title, body string) (string, error)
 	SetStatus(ctx context.Context, id, status string) error
 	Link(ctx context.Context, id, relType, target string) error
+	Unlink(ctx context.Context, id, relType, target string) error
 
 	// Meta administration. MetaApply's signature is depended on by Pilot's
 	// first-run init flow and must not change.
@@ -266,6 +429,9 @@ type Client interface {
 	TaxonomyNodeAdd(ctx context.Context, taxonomy, slug, name, parentSlug string) error
 	TaxonomyNodeMove(ctx context.Context, taxonomy, slug, newParentSlug string) error
 	TaxonomyNodeRetire(ctx context.Context, taxonomy, slug string) error
+	// TaxonomyNodeSet writes an opaque JSON metadata blob on a node (e.g. a
+	// goals node's {result, resultNote}).
+	TaxonomyNodeSet(ctx context.Context, taxonomy, slug string, metadata json.RawMessage) error
 
 	// Identity.
 	ActorRegister(ctx context.Context, actorID, publicKey, nodeID string) error
@@ -496,6 +662,50 @@ func (c *client) Link(ctx context.Context, id, relType, target string) error {
 	return c.callVoid(ctx, "dits_work_link", map[string]any{"id": id, "type": relType, "target": target})
 }
 
+func (c *client) Unlink(ctx context.Context, id, relType, target string) error {
+	return c.callVoid(ctx, "dits_work_unlink", map[string]any{"id": id, "type": relType, "target": target})
+}
+
+func (c *client) FieldSet(ctx context.Context, id, field, value string) error {
+	return c.callVoid(ctx, "dits_work_field_set", map[string]any{"id": id, "field": field, "value": value})
+}
+
+func (c *client) ScheduleSet(ctx context.Context, id string, stages []Stage) error {
+	// The tool's stages_json expects the substrate's lowercase keys
+	// (domain.ScheduleStage), but Pilot's Stage decodes the materialized
+	// WorkItem with PascalCase. Re-shape to the wire form here.
+	raw, err := json.Marshal(stagesWire(stages))
+	if err != nil {
+		return err
+	}
+	return c.callVoid(ctx, "dits_work_schedule_set", map[string]any{"id": id, "stages_json": string(raw)})
+}
+
+// stageWire is the lowercase send-shape matching domain.ScheduleStage tags.
+type stageWire struct {
+	Key       string `json:"key"`
+	Label     string `json:"label"`
+	Date      string `json:"date"`
+	Precision string `json:"precision"`
+	State     string `json:"state"`
+}
+
+func stagesWire(stages []Stage) []stageWire {
+	out := make([]stageWire, len(stages))
+	for i, s := range stages {
+		out[i] = stageWire{Key: s.Key, Label: s.Label, Date: s.Date, Precision: s.Precision, State: s.State}
+	}
+	return out
+}
+
+func (c *client) Observe(ctx context.Context, id, summary string, data json.RawMessage) error {
+	args := map[string]any{"id": id, "summary": summary}
+	if len(data) > 0 {
+		args["data"] = string(data)
+	}
+	return c.callVoid(ctx, "dits_work_observe", args)
+}
+
 func (c *client) MetaApply(ctx context.Context, metaJSON []byte) error {
 	return c.callVoid(ctx, "dits_meta_apply", map[string]any{"meta_json": string(metaJSON)})
 }
@@ -516,6 +726,12 @@ func (c *client) TaxonomyNodeMove(ctx context.Context, taxonomy, slug, newParent
 
 func (c *client) TaxonomyNodeRetire(ctx context.Context, taxonomy, slug string) error {
 	return c.callVoid(ctx, "dits_taxonomy_node_retire", map[string]any{"taxonomy": taxonomy, "slug": slug})
+}
+
+func (c *client) TaxonomyNodeSet(ctx context.Context, taxonomy, slug string, metadata json.RawMessage) error {
+	return c.callVoid(ctx, "dits_taxonomy_node_set", map[string]any{
+		"taxonomy": taxonomy, "slug": slug, "metadata": string(metadata),
+	})
 }
 
 func (c *client) ActorRegister(ctx context.Context, actorID, publicKey, nodeID string) error {
@@ -585,11 +801,19 @@ func (stubClient) AckReject(context.Context, string, string, string) error { ret
 func (stubClient) AckAmend(context.Context, string, string, []string, string) error {
 	return ErrNotImplemented
 }
+func (stubClient) FieldSet(context.Context, string, string, string) error { return ErrNotImplemented }
+func (stubClient) ScheduleSet(context.Context, string, []Stage) error      { return ErrNotImplemented }
+func (stubClient) Observe(context.Context, string, string, json.RawMessage) error {
+	return ErrNotImplemented
+}
 func (stubClient) WorkCreate(context.Context, string, string, string) (string, error) {
 	return "", ErrNotImplemented
 }
 func (stubClient) SetStatus(context.Context, string, string) error { return ErrNotImplemented }
 func (stubClient) Link(context.Context, string, string, string) error {
+	return ErrNotImplemented
+}
+func (stubClient) Unlink(context.Context, string, string, string) error {
 	return ErrNotImplemented
 }
 func (stubClient) MetaApply(context.Context, []byte) error { return ErrNotImplemented }
@@ -600,6 +824,9 @@ func (stubClient) TaxonomyNodeMove(context.Context, string, string, string) erro
 	return ErrNotImplemented
 }
 func (stubClient) TaxonomyNodeRetire(context.Context, string, string) error { return ErrNotImplemented }
+func (stubClient) TaxonomyNodeSet(context.Context, string, string, json.RawMessage) error {
+	return ErrNotImplemented
+}
 func (stubClient) ActorRegister(context.Context, string, string, string) error {
 	return ErrNotImplemented
 }

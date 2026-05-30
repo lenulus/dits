@@ -214,6 +214,12 @@ func (f *fakeClient) WorkCreate(context.Context, string, string, string) (string
 }
 func (f *fakeClient) SetStatus(context.Context, string, string) error          { return nil }
 func (f *fakeClient) Link(context.Context, string, string, string) error       { return nil }
+func (f *fakeClient) Unlink(context.Context, string, string, string) error     { return nil }
+func (f *fakeClient) FieldSet(context.Context, string, string, string) error   { return nil }
+func (f *fakeClient) ScheduleSet(context.Context, string, []mcp.Stage) error   { return nil }
+func (f *fakeClient) Observe(context.Context, string, string, json.RawMessage) error {
+	return nil
+}
 func (f *fakeClient) Classify(context.Context, string, string, string) error   { return nil }
 func (f *fakeClient) Declassify(context.Context, string, string, string) error { return nil }
 func (f *fakeClient) BindRole(context.Context, string, string, string) error   { return nil }
@@ -233,7 +239,10 @@ func (f *fakeClient) TaxonomyNodeAdd(context.Context, string, string, string, st
 func (f *fakeClient) TaxonomyNodeMove(context.Context, string, string, string) error {
 	return nil
 }
-func (f *fakeClient) TaxonomyNodeRetire(context.Context, string, string) error    { return nil }
+func (f *fakeClient) TaxonomyNodeRetire(context.Context, string, string) error { return nil }
+func (f *fakeClient) TaxonomyNodeSet(context.Context, string, string, json.RawMessage) error {
+	return nil
+}
 func (f *fakeClient) ActorRegister(context.Context, string, string, string) error { return nil }
 func (f *fakeClient) Close() error                                                { return nil }
 
