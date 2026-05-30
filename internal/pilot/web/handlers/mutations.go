@@ -525,118 +525,180 @@ func riskSevPill(sev string) template.HTML {
 func ackTab(item mcp.WorkItem) template.HTML {
 	id := rowID(item)
 	esc := template.HTMLEscapeString
-
-	// Roles & classification.
-	roleForm := func(role string) string {
-		cur := roleActor(item, role)
-		return fmt.Sprintf(`
-    <form method="post" action="/m/%s/role" class="so-roleform">
-      <span class="so-roleform__label">%s</span>
-      <input type="hidden" name="role" value="%s">
-      <input name="actor" class="so-input" placeholder="actor id" value="%s">
-      <button class="rx-btn rx-btn--ghost" type="submit">Bind</button>
-    </form>`, esc(id), esc(role), esc(role), esc(cur))
-	}
-	classForm := func(tax string) string {
-		cur := ""
-		for _, c := range item.Classifications {
-			if c.TaxonomySlug == tax {
-				cur = c.NodeSlug
-			}
-		}
-		return fmt.Sprintf(`
-    <form method="post" action="/m/%s/classify" class="so-roleform">
-      <span class="so-roleform__label">%s</span>
-      <input type="hidden" name="taxonomy" value="%s">
-      <input name="node" class="so-input" placeholder="%s node slug" value="%s">
-      <button class="rx-btn rx-btn--ghost" type="submit">Classify</button>
-    </form>`, esc(id), esc(tax), esc(tax), esc(tax), esc(cur))
-	}
-
-	// The commitment + the two ACK sides (or a file form).
-	var commit string
 	a, has := latestAck(item)
-	if !has {
-		commit = fmt.Sprintf(`
-  <div class="so-section">
-    <div class="so-section__label">The commitment</div>
-    <form method="post" action="/m/%s/ack-file" class="so-stack">
-      <input name="scope_summary" class="so-input" placeholder="Scope summary">
-      <input name="delivery_timing" class="so-input" placeholder="Delivery timing (e.g. 2026 Q3)">
-      <input name="target_outcome" class="so-input" placeholder="Target outcome">
-      <input name="acceptance_criteria" class="so-input" placeholder="Acceptance criteria">
-      <button class="rx-btn rx-btn--accent" type="submit">File ACK</button>
-    </form>
-  </div>`, esc(id))
-	} else {
-		sideCard := func(who, state string) string {
-			return fmt.Sprintf(`
-    <div class="so-ackcard">
-      <div class="so-ackcard__head"><strong>%s</strong> %s</div>
-      <div class="so-ackbtns">
-        <form method="post" action="/m/%s/ack/%s/accept"><button class="rx-btn" style="background:var(--ryg-green);color:#fff;border-color:var(--ryg-green)" type="submit">Accept</button></form>
-        <form method="post" action="/m/%s/ack/%s/reject"><button class="rx-btn" style="background:var(--ryg-red);color:#fff;border-color:var(--ryg-red)" type="submit">Reject</button></form>
-      </div>
-    </div>`, esc(who), string(ackStatePill(state)), esc(id), esc(who), esc(id), esc(who))
-		}
-		commit = fmt.Sprintf(`
-  <div class="so-section">
-    <div class="so-section__label">The commitment — %s</div>
-    <div class="so-field"><span class="so-field__k">Scope</span> %s</div>
-    <div class="so-field"><span class="so-field__k">Delivery</span> %s</div>
-    <div class="so-field"><span class="so-field__k">Target</span> %s</div>
-    <div class="so-field"><span class="so-field__k">Acceptance</span> %s</div>
-  </div>
-  <div class="so-section">
-    <div class="so-section__label">The ACKs — %s</div>
-    %s
-    %s
-    <form method="post" action="/m/%s/amend" class="so-amend">
-      <select name="amendment_type" class="so-select">
-        <option value="scope_change">scope_change</option>
-        <option value="timeline_change">timeline_change</option>
-        <option value="target_change">target_change</option>
-        <option value="clarification">clarification</option>
-      </select>
-      <input name="reason" class="so-input" placeholder="amendment reason">
-      <button class="rx-btn rx-btn--ghost" type="submit">Amend</button>
-    </form>
-  </div>`,
-			string(rollupPill(a.Rollup())),
-			esc(a.ScopeSummary), esc(a.DeliveryTiming), esc(a.TargetOutcome), esc(a.AcceptanceCriteria),
-			string(rollupPill(a.Rollup())),
-			sideCard("specifier", a.Specifier), sideCard("builder", a.Builder),
-			esc(id))
-	}
 
-	// Header meta line (status · rollup · RYG) + the diagnostics stack.
+	var b strings.Builder
+
+	// Header meta line (status · alignment · RYG · kind) + diagnostics stack.
 	rollup := "both_pending"
 	if has {
 		rollup = a.Rollup()
 	}
-	meta := fmt.Sprintf(`<div class="so-meta">%s%s%s<span style="margin-left:auto">kind=milestone</span></div>%s`,
+	fmt.Fprintf(&b, `<div class="so-meta">%s%s%s<span style="margin-left:auto">kind=milestone</span></div>%s`,
 		string(statusPill(item.Status)), string(rollupPill(rollup)), string(rygChip(item.RYG())), diagStack(item))
 
-	// The delivery-target editor + stages preview (C.1) below the commitment.
-	targetBlock := targetEditor(item) + stagesPreview(item)
+	// --- Roles & classification: avatar FieldRows w/ click-to-edit picker. ---
+	b.WriteString(soSection("Roles & classification", "Specifier authors · Builder commits · Pilot observes"))
+	b.WriteString(fieldRow("Specifier", string(editableActorCell(id, "specifier", roleActor(item, "specifier")))))
+	b.WriteString(fieldRow("Builder", string(editableActorCell(id, "builder", roleActor(item, "builder")))))
+	b.WriteString(fieldRow("Pilot", string(editableActorCell(id, "pilot", roleActor(item, "pilot")))))
+	b.WriteString(fieldRow("Org node", classEdit(id, "org", classNode(item, "org"))))
+	b.WriteString(fieldRow("Product", classEdit(id, "product", classNode(item, "product"))))
+
+	// --- The commitment: delivery target + scope/outcome/acceptance + stages. ---
+	b.WriteString(soSection("The commitment", "what the Specifier and Builder are aligning to: scope, schedule, outcome"))
+	b.WriteString(targetEditor(item))
+	if rfc := item.FromRFC(); rfc != "" {
+		b.WriteString(fieldRow("Origin RFC", fmt.Sprintf(
+			`<span class="origin-rfc"><a class="dx-id" style="color:var(--accent)" href="/rfcs?open=%s">%s</a> <span class="origin-rfc__title">spawned from this RFC &rarr;</span></span>`,
+			esc(rfc), esc(rfc))))
+	}
+	if has {
+		b.WriteString(fieldRow("Scope", commitVal(a.ScopeSummary)))
+		b.WriteString(fieldRow("Target outcome", commitVal(a.TargetOutcome)))
+		b.WriteString(fieldRow("Acceptance", commitVal(a.AcceptanceCriteria)))
+	}
+	b.WriteString(stagesPreview(item))
+
+	// --- The ACKs: two stand-behind cards, or the file form. ---
+	if !has {
+		b.WriteString(soSection("The ACKs", "no commitment filed yet"))
+		fmt.Fprintf(&b, `<form method="post" action="/m/%s/ack-file" hx-post="/m/%s/ack-file" hx-target="[data-panel-body]" hx-swap="innerHTML" class="ack-file">
+  <input name="scope_summary" class="so-input" placeholder="Scope — what this milestone commits to">
+  <input name="delivery_timing" class="so-input" placeholder="Delivery timing (e.g. 2026 Q3)">
+  <input name="target_outcome" class="so-input" placeholder="Target outcome">
+  <input name="acceptance_criteria" class="so-input" placeholder="Acceptance criteria">
+  <button class="rx-btn rx-btn--accent" type="submit">File ACK</button>
+</form>`, esc(id), esc(id))
+	} else {
+		b.WriteString(soSection("The ACKs", "each role independently stands behind (or rejects)"))
+		b.WriteString(`<div class="ack-stack">`)
+		b.WriteString(ackSideCard(id, "specifier", roleActor(item, "specifier"), a.Specifier))
+		b.WriteString(ackSideCard(id, "builder", roleActor(item, "builder"), a.Builder))
+		b.WriteString(`</div>`)
+		// Amend (auto-clears on material change).
+		fmt.Fprintf(&b, `<form method="post" action="/m/%s/amend" hx-post="/m/%s/amend" hx-target="[data-panel-body]" hx-swap="innerHTML" class="so-amend">
+  <select name="amendment_type" class="so-select">
+    <option value="scope_change">scope_change</option>
+    <option value="timeline_change">timeline_change</option>
+    <option value="target_change">target_change</option>
+    <option value="clarification">clarification</option>
+  </select>
+  <input name="reason" class="so-input" placeholder="amendment reason">
+  <button class="rx-btn rx-btn--ghost" type="submit">Amend</button>
+</form>`, esc(id), esc(id))
+	}
 
 	// ACK history — loaded on demand via HTMX (needs the event feed).
-	history := fmt.Sprintf(`<div hx-get="/partials/panel/%s/ack-history" hx-trigger="load" hx-swap="innerHTML" hx-target="this">%s</div>`,
+	fmt.Fprintf(&b, `<div hx-get="/partials/panel/%s/ack-history" hx-trigger="load" hx-swap="innerHTML" hx-target="this">%s</div>`,
 		esc(id), sectionHead("ACK history", -1, ""))
 
-	body := fmt.Sprintf(`%s
-  <div class="so-section">
-    <div class="so-section__label">Roles &amp; classification</div>
-    %s%s%s%s%s
-  </div>
-  %s
-  %s
-  %s`,
-		meta,
-		roleForm("specifier"), roleForm("builder"), roleForm("pilot"),
-		classForm("product"), classForm("org"),
-		targetBlock, commit, history)
-	return template.HTML(body)
+	return template.HTML(b.String())
+}
+
+// soSection renders a prototype section header (flex bar: label + optional
+// italic hint + trailing rule). Field rows are SIBLINGS after it, not children.
+func soSection(title, hint string) string {
+	out := `<div class="so-section"><span>` + template.HTMLEscapeString(title) + `</span>`
+	if hint != "" {
+		out += `<span class="so-section__hint">` + template.HTMLEscapeString(hint) + `</span>`
+	}
+	return out + `</div>`
+}
+
+// fieldRow renders a label/value row (panels.jsx FieldRow → .so-line .lab .val).
+func fieldRow(label, valHTML string) string {
+	return `<div class="so-line"><span class="lab">` + template.HTMLEscapeString(label) +
+		`</span><span class="val">` + valHTML + `</span></div>`
+}
+
+// commitVal renders a (read-only) multiline commitment field value, or a
+// placeholder. The filed scope/outcome/criteria change via amend/re-file.
+func commitVal(s string) string {
+	if strings.TrimSpace(s) == "" {
+		return `<span class="placeholder">—</span>`
+	}
+	return `<span style="font-size:13px;color:var(--ink-1);line-height:1.5">` + template.HTMLEscapeString(s) + `</span>`
+}
+
+// classNode returns the work item's classification node slug for a taxonomy.
+func classNode(item mcp.WorkItem, tax string) string {
+	for _, c := range item.Classifications {
+		if c.TaxonomySlug == tax {
+			return c.NodeSlug
+		}
+	}
+	return ""
+}
+
+// classEdit renders a classification value (mono node slug) + a compact inline
+// classify form, in the panel FieldRow value slot.
+func classEdit(id, tax, slug string) string {
+	esc := template.HTMLEscapeString
+	disp := `<span class="placeholder">unclassified</span>`
+	if slug != "" {
+		disp = `<span style="font-family:var(--font-mono);font-size:11.5px;color:var(--ink-2)">` + esc(slug) + `</span>`
+	}
+	return `<span class="val--inline">` + disp +
+		`<form method="post" action="/m/` + esc(id) + `/classify" hx-post="/m/` + esc(id) + `/classify" hx-target="[data-panel-body]" hx-swap="innerHTML" style="display:flex;gap:4px;margin:0;flex:1;min-width:0">` +
+		`<input type="hidden" name="taxonomy" value="` + esc(tax) + `">` +
+		`<input name="node" class="so-input" style="width:auto;flex:1;min-width:110px" placeholder="` + esc(tax) + ` node slug" value="` + esc(slug) + `">` +
+		`<button class="rx-btn rx-btn--ghost rx-btn--sm" type="submit">Set</button></form></span>`
+}
+
+// ackSideCard renders one role's stand-behind card (panels.jsx AckSide): who +
+// actor avatar, the big state pill, and the Accept/Reject control group.
+func ackSideCard(id, who, actor, state string) string {
+	esc := template.HTMLEscapeString
+	if state == "" {
+		state = "pending"
+	}
+	label := "Specifier ACK"
+	if who == "builder" {
+		label = "Builder ACK"
+	}
+	actorHTML := ""
+	if actor != "" {
+		actorHTML = `<span class="ack-side__actor">` + string(actorCell(actor)) + `</span>`
+	}
+	btn := func(action, variant, lab string) string {
+		active := ""
+		if (action == "accept" && state == "accepted") || (action == "reject" && state == "rejected") {
+			active = " is-active"
+		}
+		return `<form method="post" action="/m/` + esc(id) + `/ack/` + esc(who) + `/` + esc(action) +
+			`" hx-post="/m/` + esc(id) + `/ack/` + esc(who) + `/` + esc(action) +
+			`" hx-target="[data-panel-body]" hx-swap="innerHTML" style="margin:0">` +
+			`<button type="submit" class="ackpop__btn ackpop__btn--` + variant + active + `">` + lab + `</button></form>`
+	}
+	return `<div class="ack-side ack-side--` + esc(state) + `">` +
+		`<div class="ack-side__head"><span class="ack-side__who">` + label + `</span>` + actorHTML + `</div>` +
+		`<div class="ack-side__state">` +
+		`<span class="dx-pill dx-pill--` + ackVariant(state) + `" style="font-size:12px;padding:4px 12px;height:24px">` + ackLabel(state) + `</span>` +
+		`<div class="ack-side__btns">` + btn("accept", "g", "Accept") + btn("reject", "r", "Reject") + `</div>` +
+		`</div></div>`
+}
+
+func ackVariant(state string) string {
+	switch state {
+	case "accepted":
+		return "g"
+	case "rejected":
+		return "r"
+	default:
+		return "neutral"
+	}
+}
+
+func ackLabel(state string) string {
+	switch state {
+	case "accepted":
+		return "Accepted"
+	case "rejected":
+		return "Rejected"
+	default:
+		return "Pending"
+	}
 }
 
 // rygChip renders a small RYG health pill for the panel meta line, or "".
