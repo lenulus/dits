@@ -1,2 +1,0 @@
-Phase-4 skeleton placeholder. Static assets (CSS/JS/fonts lifted from the
-prototype) land in Phase 5 (see implementation-plan-v2 §9.1).

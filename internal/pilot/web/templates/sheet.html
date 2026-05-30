@@ -1,0 +1,90 @@
+{{- /*
+  sheet.html — the Sheet primitive (port of app/sheet.jsx, §9.3).
+
+  Non-negotiable layout fixes preserved from the prototype:
+    * .sht-wrap is the scroll container (overflow:auto).
+    * <table class="sht"> has table-layout:fixed and an explicit width pinned
+      to the exact sum of <col> widths (.TotalWidth) — this is the bug the
+      prototype debugged at length; without it the frozen columns drift.
+    * Frozen ID + Title columns are left-sticky with opaque backgrounds; each
+      frozen cell's `left` is the pre-computed FrozenLeft offset.
+    * The multi-select gutter is sticky-left with a tinted opaque background
+      at every horizontal scroll position (.sht tbody td.sht-gutter rule).
+
+  Data is a *web.SheetModel; handlers must call ComputeLayout first. The JS
+  island (sheet.js) hydrates keyboard nav / selection / panel-open on top of
+  this server-rendered, already-correct table.
+*/ -}}
+{{- define "sheet" -}}
+{{- $sel := .Selectable -}}
+<div class="sht-wrap" tabindex="0" data-sheet data-nav-col="{{.NavColumnIdx}}">
+  <table class="sht" style="width:{{.TotalWidth}}px">
+    <colgroup>
+      {{if $sel}}<col style="width:32px">{{end}}
+      {{range .DisplayColumns}}<col style="width:{{if .Width}}{{.Width}}{{else}}140{{end}}px">{{end}}
+    </colgroup>
+    <thead>
+      {{if .Groups}}
+      {{/* Column-group bands. Collapsed bands render the summary column. */}}
+      <tr class="sht-bands">
+        {{if $sel}}<th class="sht-band sht-band--gutter sht-gutter"></th>{{end}}
+        {{range $.BandCells}}
+        <th colspan="{{.Span}}"
+            class="sht-band{{if .Collapsed}} sht-band--collapsed{{end}}{{if .Frozen}} sht-band--frozen{{end}}{{if .Locked}} sht-band--locked{{end}}"
+            {{if .Frozen}}style="left:{{.Left}}px"{{end}}
+            data-group="{{.Key}}"{{if not .Locked}} data-band-toggle{{end}}>
+          <span class="sht-band__lab">{{.Label}}</span>
+          {{if not .Locked}}<span class="sht-band__tog">{{if .Collapsed}}▸{{else}}▾{{end}}</span>{{end}}
+        </th>
+        {{end}}
+      </tr>
+      {{end}}
+      <tr>
+        {{if $sel}}<th class="sht-gutter"><input type="checkbox" data-select-all></th>{{end}}
+        {{range .DisplayColumns}}
+        <th class="is-sortable{{if .Frozen}} is-frozen{{end}}{{if .IsSummary}} is-summary{{end}}"
+            {{if .Frozen}}style="left:{{.FrozenLeft}}px"{{end}}>
+          <div class="sht-th-row">
+            <span class="sht-th-lab">{{.Label}}</span>
+            {{if not .IsSummary}}<span class="sht-th-filt" title="Filter">
+              <svg viewBox="0 0 24 24" width="11" height="11" style="stroke:currentColor;stroke-width:1.5;fill:none;stroke-linecap:round;stroke-linejoin:round"><circle cx="5" cy="12" r="1.2"/><circle cx="12" cy="12" r="1.2"/><circle cx="19" cy="12" r="1.2"/></svg>
+            </span>{{end}}
+          </div>
+        </th>
+        {{end}}
+      </tr>
+    </thead>
+    <tbody>
+      {{$dcols := .DisplayColumns}}
+      {{$navIdx := .NavColumnIdx}}
+      {{$active := .ActiveID}}
+      {{range $ri, $row := .Rows}}
+      <tr data-row-id="{{$row.ID}}"{{if eq $row.ID $active}} class="is-active"{{end}}>
+        {{if $sel}}<td class="sht-gutter"><input type="checkbox" data-select-row="{{$row.ID}}"></td>{{end}}
+        {{range $ci, $col := $dcols}}
+        <td class="{{if $col.Frozen}}is-frozen {{end}}{{if $col.Num}}is-num{{end}}{{if $col.IsSummary}} is-summary{{end}}"
+            {{if $col.Frozen}}style="left:{{$col.FrozenLeft}}px"{{end}}>
+          {{- $cell := index $row.Cells $col.Key -}}
+          <div class="sht-cell{{if $col.Align}} is-right{{end}}{{if $col.Num}} is-num{{end}}{{if $col.Readonly}} is-readonly{{end}}"
+               data-col-idx="{{$ci}}"{{if eq $ci $navIdx}} data-nav-cell{{end}}>
+            {{- if $cell.HTML}}{{$cell.HTML}}{{else if $cell.Raw}}{{$cell.Raw}}{{else}}<span class="placeholder">—</span>{{end -}}
+          </div>
+        </td>
+        {{end}}
+      </tr>
+      {{end}}
+      {{if .AddLabel}}
+      <tr class="sht-add" data-add-row>
+        {{if $sel}}<td class="sht-gutter"></td>{{end}}
+        <td colspan="{{len .DisplayColumns}}">
+          <div class="sht-cell">
+            <svg viewBox="0 0 24 24" width="11" height="11" style="stroke:currentColor;stroke-width:1.5;fill:none;stroke-linecap:round;stroke-linejoin:round"><path d="M12 5v14M5 12h14"/></svg>
+            &nbsp;{{.AddLabel}} <span class="sht-add-key">N</span>
+          </div>
+        </td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+</div>
+{{- end -}}

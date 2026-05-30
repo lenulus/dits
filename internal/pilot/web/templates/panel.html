@@ -1,0 +1,39 @@
+{{- /*
+  panel.html — the 640px slide-over record panel (port of ds/shared.jsx
+  SlideOver + app/panels.jsx RecordPanel, §9.4). The 640px width and the
+  36px gap above the viewport (so the hintbar sits below) come from the
+  .rx-slideover override in app.css — do not inline those here.
+
+  Tab order is the post-iteration final: ACK · Status · Stages · Deps ·
+  Updates · Receipts. Tab bodies are placeholders in the foundation.
+  Data is a *web.PanelModel.
+*/ -}}
+{{- define "panel" -}}
+<div class="rx-slideover" data-panel>
+  <div class="rx-slideover__head">
+    <div>
+      <div class="id">{{.ID}}</div>
+      <div class="title">{{.Title}}</div>
+    </div>
+    <button class="rx-slideover__close" data-panel-close aria-label="Close">
+      <svg viewBox="0 0 24 24" width="14" height="14" style="stroke:currentColor;stroke-width:1.5;fill:none;stroke-linecap:round;stroke-linejoin:round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+    </button>
+  </div>
+  {{if .Tabs}}
+  <div class="rx-slideover__tabs">
+    {{range .Tabs}}
+    <div class="rx-slideover__tab{{if .Active}} is-active{{end}}" data-panel-tab="{{.Key}}">{{.Label}}</div>
+    {{end}}
+  </div>
+  {{end}}
+  <div class="rx-slideover__body" data-panel-body>
+    {{if .Body}}{{.Body}}
+    {{else}}<div class="empty-line">TODO(phase 5): {{.ActiveTab}} tab content for this record.</div>{{end}}
+  </div>
+  <div style="border-top:1px solid var(--hairline);padding:12px 20px;background:var(--surface)">
+    <div style="display:flex;gap:8px;align-items:center">
+      <div style="margin-left:auto;font-family:var(--font-mono);font-size:10px;color:var(--ink-4)">signed · {{if .Sig}}{{.Sig}}{{else}}a1b2c3d4{{end}}</div>
+    </div>
+  </div>
+</div>
+{{- end -}}

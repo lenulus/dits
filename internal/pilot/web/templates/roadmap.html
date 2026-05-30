@@ -1,0 +1,30 @@
+{{- /*
+  roadmap.html — the public, unauthenticated customer roadmap (§9.6). Its
+  own minimal layout: no sidebar, no topbar actions, no RYG/indicators —
+  just committed scope and timing. Data is a *web.Page (uses .View, .Body).
+  Foundation: chrome only with a placeholder body.
+*/ -}}
+{{- define "roadmap" -}}
+<!doctype html>
+<html lang="en" class="rx-base">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{.View.H1}} · DITS</title>
+  <link rel="stylesheet" href="/static/css/colors_and_type.css">
+  <link rel="stylesheet" href="/static/css/shared.css">
+  <link rel="stylesheet" href="/static/css/app.css">
+</head>
+<body class="rx-base" style="background:var(--paper-0)">
+  <div style="max-width:840px;margin:0 auto;padding:48px 32px 80px">
+    <div class="rx-eyebrow" style="margin-bottom:10px">
+      <span>DITS · PUBLIC</span><span class="sep">/</span><span>ROADMAP</span>
+    </div>
+    <h1 class="rx-main__h1" style="font-size:30px">{{.View.H1}}</h1>
+    <div class="rx-main__sub" style="font-size:14px;margin-bottom:24px">{{.View.Sub}}</div>
+    {{if .Body}}{{.Body}}
+    {{else}}<div class="empty-line">TODO(phase 5): filtered customer-visible milestone projection.</div>{{end}}
+  </div>
+</body>
+</html>
+{{- end -}}

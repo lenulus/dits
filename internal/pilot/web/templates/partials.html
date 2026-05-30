@@ -1,0 +1,30 @@
+{{- /*
+  partials.html — small reusable fragments.
+
+  "icon": renders one inline SVG from the prototype's Lucide-ish icon set
+  (ds/shared.jsx mkIcon calls). Argument is the icon key string. Stroke,
+  width, fill, and linecaps match the prototype (.rx-nav-item svg rules in
+  ds/shared.css size them to 14px and colour them via currentColor).
+*/ -}}
+{{- define "icon" -}}
+{{- $k := . -}}
+<svg viewBox="0 0 24 24" width="14" height="14" style="stroke:currentColor;stroke-width:1.5;fill:none;stroke-linecap:round;stroke-linejoin:round">
+{{- if eq $k "home"}}<path d="M3 11l9-7 9 7v10H3z"/>
+{{- else if eq $k "panel"}}<rect x="3" y="4" width="18" height="16" rx="1"/><path d="M3 9h18"/>
+{{- else if eq $k "check"}}<path d="M5 13l4 4L19 7"/>
+{{- else if eq $k "flag"}}<path d="M5 21V4h12l-2 4 2 4H5"/>
+{{- else if eq $k "compass"}}<circle cx="12" cy="12" r="9"/><path d="M15 9l-2 6-4 2 2-6z"/>
+{{- else if eq $k "scale"}}<path d="M12 3v18M6 7h12M4 13l2-6 2 6M16 13l2-6 2 6"/><path d="M3 19h18"/>
+{{- else if eq $k "users"}}<circle cx="9" cy="8" r="3.5"/><path d="M2 20c.8-3 3.2-5 7-5s6.2 2 7 5"/><circle cx="17" cy="9" r="3"/><path d="M17 13c3 0 5 2 5 5"/>
+{{- else if eq $k "tag"}}<path d="M3 12l9-9 8 1 1 8-9 9z"/><circle cx="14" cy="8" r="1.5"/>
+{{- else if eq $k "book"}}<path d="M4 5a2 2 0 012-2h13v16H6a2 2 0 00-2 2V5z"/><path d="M6 17h13"/>
+{{- else if eq $k "map"}}<path d="M3 6l6-2 6 2 6-2v14l-6 2-6-2-6 2z"/><path d="M9 4v16M15 6v16"/>
+{{- else if eq $k "search"}}<circle cx="11" cy="11" r="7"/><path d="M21 21l-5-5"/>
+{{- else if eq $k "plus"}}<path d="M12 5v14M5 12h14"/>
+{{- else if eq $k "caret"}}<path d="M6 9l6 6 6-6"/>
+{{- else if eq $k "x"}}<path d="M6 6l12 12M18 6L6 18"/>
+{{- else if eq $k "alert"}}<circle cx="12" cy="12" r="9"/><path d="M12 8v4M12 16h.01"/>
+{{- else}}<rect x="3" y="4" width="18" height="16" rx="1"/><path d="M3 9h18"/>
+{{- end -}}
+</svg>
+{{- end -}}

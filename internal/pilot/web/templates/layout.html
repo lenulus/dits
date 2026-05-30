@@ -1,0 +1,119 @@
+{{- /*
+  layout.html — the .rx-app shell, ported from App.jsx's render (§9.2).
+  TopBar · Sidebar (4 sections / 12 nav items) · main header (eyebrow / h1 /
+  sub) · body · optional sheet + slide-over panel · hintbar · ⌘K mount.
+  Data is a *web.Page.
+*/ -}}
+{{- define "layout" -}}
+<!doctype html>
+<html lang="en" class="rx-base">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{.View.H1}} · DITS Pilot</title>
+  <link rel="stylesheet" href="/static/css/colors_and_type.css">
+  <link rel="stylesheet" href="/static/css/shared.css">
+  <link rel="stylesheet" href="/static/css/app.css">
+</head>
+<body class="rx-base">
+<div class="rx-app">
+
+  {{/* ---------- TopBar (ds/shared.jsx TopBar) ---------- */}}
+  <div class="rx-topbar">
+    <div class="rx-topbar__brand">
+      <div class="dots">
+        <span class="dot" style="background:var(--ryg-green)"></span>
+        <span class="dot" style="background:var(--ryg-yellow)"></span>
+        <span class="dot" style="background:var(--ryg-red)"></span>
+      </div>
+      DITS
+    </div>
+    <div class="rx-topbar__workspace">
+      <span class="wtag">{{.View.Tag}}</span>
+      <span>{{.View.Label}}</span>
+      {{template "icon" "caret"}}
+    </div>
+    <div class="rx-topbar__search" id="rx-search" role="button" tabindex="0">
+      {{template "icon" "search"}}
+      <span>Search milestones, goals, RFCs, log entries</span>
+      <kbd>⌘K</kbd>
+    </div>
+    <div class="rx-topbar__actions">
+      <span class="rx-topbar__sync"><span class="rx-dot rx-dot--g" style="margin:0"></span>synced · 14s</span>
+      {{template "icon" "alert"}}
+      <div class="avatar" style="background:#1E3F60">EJ</div>
+    </div>
+  </div>
+
+  {{/* ---------- Sidebar (ds/shared.jsx Sidebar) ---------- */}}
+  <div class="rx-sidebar">
+    {{range .Nav}}
+    <div class="rx-sidebar__section">
+      <div class="rx-sidebar__label">{{.Label}}</div>
+      {{range .Items}}
+      <a class="rx-nav-item{{if .Active}} is-active{{end}}" href="{{.Path}}">
+        {{template "icon" .Icon}}
+        <span>{{.Label}}</span>
+        {{if .Count}}<span class="count">{{.Count}}</span>{{end}}
+      </a>
+      {{end}}
+    </div>
+    {{end}}
+  </div>
+
+  {{/* ---------- Main ---------- */}}
+  <div class="rx-main">
+    <div class="rx-main__header">
+      <div class="rx-eyebrow">
+        <span>DITS · SUBSTRATE</span><span class="sep">/</span>
+        <span>RE · {{.View.Tag}}</span>
+        {{if .Counters}}<span class="sep">/</span><span class="em">{{.Counters}}</span>{{end}}
+      </div>
+      <h1 class="rx-main__h1">{{.View.H1}}</h1>
+      <div class="rx-main__sub">{{.View.Sub}}</div>
+    </div>
+
+    <div class="rx-main__body">
+      {{if .Sheet}}{{template "sheet" .Sheet}}{{end}}
+      {{.Body}}
+    </div>
+
+    {{if .Panel}}{{template "panel" .Panel}}{{end}}
+  </div>
+
+  {{/* ---------- ⌘K palette mount (populated by palette.js) ---------- */}}
+  <div id="cmd-mount"></div>
+
+  {{/* ---------- Hint bar (app.css .hintbar) ---------- */}}
+  <div class="hintbar">
+    <span><span class="kbd">⌘K</span>palette</span>
+    <span><span class="kbd">Enter</span>edit cell</span>
+    <span><span class="kbd">⌘↵</span>open detail</span>
+    <span><span class="kbd">Tab</span>next</span>
+    <span><span class="kbd">␣</span>select row</span>
+    <span><span class="kbd">Esc</span>cancel / close</span>
+  </div>
+
+</div>
+
+{{/* Nav index for the ⌘K palette — the twelve routes. */}}
+<script id="pilot-nav" type="application/json">[
+  {"label":"For you","path":"/for-you","icon":"home"},
+  {"label":"Leadership","path":"/leadership","icon":"home"},
+  {"label":"Portfolio","path":"/portfolio","icon":"panel"},
+  {"label":"ACK","path":"/ack","icon":"check"},
+  {"label":"RFC review queue","path":"/rfcs","icon":"flag"},
+  {"label":"Pilot's Log","path":"/log","icon":"compass"},
+  {"label":"DecisionBlocks","path":"/decisions","icon":"scale"},
+  {"label":"Outcome assessments","path":"/outcomes","icon":"check"},
+  {"label":"Role bindings","path":"/roles","icon":"users"},
+  {"label":"Taxonomies","path":"/taxonomies","icon":"tag"},
+  {"label":"Event log","path":"/events","icon":"book"},
+  {"label":"Customer roadmap","path":"/roadmap","icon":"map"}
+]</script>
+<script src="/static/js/sheet.js" defer></script>
+<script src="/static/js/panel.js" defer></script>
+<script src="/static/js/palette.js" defer></script>
+</body>
+</html>
+{{- end -}}
