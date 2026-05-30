@@ -25,6 +25,7 @@ type fakeClient struct {
 	creates  []createCall
 	statuses []statusCall
 	links    []linkCall
+	reviews  []reviewCall
 
 	// nextID is handed back from WorkCreate (incrementing) so Link targets are
 	// distinguishable.
@@ -37,6 +38,7 @@ type fakeClient struct {
 type createCall struct{ kind, title, body string }
 type statusCall struct{ id, status string }
 type linkCall struct{ id, relType, target string }
+type reviewCall struct{ id, role, scope string }
 
 func newFake() *fakeClient {
 	return &fakeClient{Client: mcp.NewStub(), lists: map[string][]mcp.WorkItem{}}
@@ -72,6 +74,11 @@ func (f *fakeClient) SetStatus(_ context.Context, id, status string) error {
 
 func (f *fakeClient) Link(_ context.Context, id, relType, target string) error {
 	f.links = append(f.links, linkCall{id, relType, target})
+	return nil
+}
+
+func (f *fakeClient) ReviewRequest(_ context.Context, id, role, scope string) error {
+	f.reviews = append(f.reviews, reviewCall{id, role, scope})
 	return nil
 }
 
@@ -206,6 +213,11 @@ func TestRunOnce_EscalatesIdleDecision(t *testing.T) {
 	if len(f.statuses) != 1 || f.statuses[0] != (statusCall{"DB-1", statusEscalated}) {
 		t.Fatalf("SetStatus calls = %+v, want one {DB-1 escalated}", f.statuses)
 	}
+	// The escalation also routes the decision to Leadership via a real review
+	// request (§10.2), not just a status flip.
+	if len(f.reviews) != 1 || f.reviews[0] != (reviewCall{"DB-1", roleLeadership, scopeDecisionIdle}) {
+		t.Fatalf("ReviewRequest calls = %+v, want one {DB-1 leadership decision_idle}", f.reviews)
+	}
 }
 
 func TestRunOnce_DecisionIdleFallsBackToCreatedAt(t *testing.T) {
@@ -240,8 +252,8 @@ func TestRunOnce_AllFreshIsNoOp(t *testing.T) {
 	if (sum != Summary{}) {
 		t.Fatalf("expected zero Summary, got %+v", sum)
 	}
-	if len(f.creates)+len(f.links)+len(f.statuses) != 0 {
-		t.Fatalf("expected no mutations; creates=%d links=%d statuses=%d", len(f.creates), len(f.links), len(f.statuses))
+	if len(f.creates)+len(f.links)+len(f.statuses)+len(f.reviews) != 0 {
+		t.Fatalf("expected no mutations; creates=%d links=%d statuses=%d reviews=%d", len(f.creates), len(f.links), len(f.statuses), len(f.reviews))
 	}
 }
 

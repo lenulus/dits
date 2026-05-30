@@ -1178,6 +1178,48 @@ func registerTools(s *server.MCPServer, cfg Config) {
 		return jsonResult(map[string]any{"registered": actorID})
 	}))
 
+	s.AddTool(mcp.NewTool("dits_review_request",
+		mcp.WithDescription("Request a review on a work item targeting a reviewer role (e.g. leadership). "+
+			"Emits work.review_requested with the role; the methodology routes it to whoever holds that role. "+
+			"Used by Pilot's scheduler to escalate idle decisions to Leadership."),
+		mcp.WithString("id", mcp.Required()),
+		mcp.WithString("reviewer_role", mcp.Required(), mcp.Description("Role slug to route the review to, e.g. leadership")),
+		mcp.WithString("scope", mcp.Description("Free-form reason for the review, e.g. decision_idle")),
+	), withOps(cfg, func(ctx context.Context, w *workops.WorkOps, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		id, errR, _ := resolveID(ctx, w, req)
+		if errR != nil {
+			return errR, nil
+		}
+		res, err := w.ReviewRequest(ctx, id, req.GetString("reviewer_role", ""), req.GetString("scope", ""))
+		if err != nil {
+			return errResult(err)
+		}
+		return jsonResult(res)
+	}))
+
+	s.AddTool(mcp.NewTool("dits_event_submit",
+		mcp.WithDescription("Append an externally-signed event after verifying its Ed25519 signature against the "+
+			"actor's registered public key. Rejects on a missing/invalid signature or an unknown actor. This is the "+
+			"per-user custodial-signing path: a client (e.g. Pilot) constructs and signs an event as a specific actor "+
+			"and submits it, so the appended event is attributed to that actor — not to the dits-mcp project actor."),
+		mcp.WithString("signed_event_json", mcp.Required(),
+			mcp.Description("A complete, signed domain.Event as a JSON string (with a non-empty signature).")),
+	), withOps(cfg, func(ctx context.Context, w *workops.WorkOps, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		raw := strings.TrimSpace(req.GetString("signed_event_json", ""))
+		if raw == "" {
+			return mcp.NewToolResultError("signed_event_json is required"), nil
+		}
+		var evt domain.Event
+		if err := json.Unmarshal([]byte(raw), &evt); err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("invalid signed_event_json: %v", err)), nil
+		}
+		wi, err := w.SubmitSignedEvent(ctx, evt)
+		if err != nil {
+			return errResult(err)
+		}
+		return jsonResult(wi)
+	}))
+
 	// ---------- Meta administration ----------
 
 	s.AddTool(mcp.NewTool("dits_meta_apply",

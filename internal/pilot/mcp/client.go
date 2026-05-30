@@ -436,6 +436,16 @@ type Client interface {
 	// Identity.
 	ActorRegister(ctx context.Context, actorID, publicKey, nodeID string) error
 
+	// ReviewRequest emits work.review_requested targeting a reviewer role
+	// (e.g. "leadership"). Used by the scheduler to escalate idle decisions and
+	// by the ACK target-change route, instead of just setting status=escalated.
+	ReviewRequest(ctx context.Context, id, reviewerRole, scope string) error
+
+	// EventSubmit appends an externally-signed event (custodial per-user
+	// signing, §8.2). The substrate verifies signedEventJSON's Ed25519
+	// signature against the actor's registered public key before admitting it.
+	EventSubmit(ctx context.Context, signedEventJSON []byte) error
+
 	// Close releases the underlying transport (and subprocess, for stdio).
 	Close() error
 }
@@ -742,6 +752,18 @@ func (c *client) ActorRegister(ctx context.Context, actorID, publicKey, nodeID s
 	return c.callVoid(ctx, "dits_actor_register", args)
 }
 
+func (c *client) ReviewRequest(ctx context.Context, id, reviewerRole, scope string) error {
+	args := map[string]any{"id": id, "reviewer_role": reviewerRole}
+	if scope != "" {
+		args["scope"] = scope
+	}
+	return c.callVoid(ctx, "dits_review_request", args)
+}
+
+func (c *client) EventSubmit(ctx context.Context, signedEventJSON []byte) error {
+	return c.callVoid(ctx, "dits_event_submit", map[string]any{"signed_event_json": string(signedEventJSON)})
+}
+
 // --- Result decoding (transport-independent, unit-testable) ---
 
 // resultText concatenates the text content blocks of a tool result.
@@ -802,7 +824,7 @@ func (stubClient) AckAmend(context.Context, string, string, []string, string) er
 	return ErrNotImplemented
 }
 func (stubClient) FieldSet(context.Context, string, string, string) error { return ErrNotImplemented }
-func (stubClient) ScheduleSet(context.Context, string, []Stage) error      { return ErrNotImplemented }
+func (stubClient) ScheduleSet(context.Context, string, []Stage) error     { return ErrNotImplemented }
 func (stubClient) Observe(context.Context, string, string, json.RawMessage) error {
 	return ErrNotImplemented
 }
@@ -830,4 +852,8 @@ func (stubClient) TaxonomyNodeSet(context.Context, string, string, json.RawMessa
 func (stubClient) ActorRegister(context.Context, string, string, string) error {
 	return ErrNotImplemented
 }
-func (stubClient) Close() error { return nil }
+func (stubClient) ReviewRequest(context.Context, string, string, string) error {
+	return ErrNotImplemented
+}
+func (stubClient) EventSubmit(context.Context, []byte) error { return ErrNotImplemented }
+func (stubClient) Close() error                              { return nil }

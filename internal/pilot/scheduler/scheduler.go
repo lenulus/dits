@@ -14,11 +14,12 @@
 // `scheduler.pilot` key is a follow-up, the same gap as Pilot's OAuth/custodial
 // signing bridge (§8.2). The custodial path is intentionally not built here.
 //
-// Similarly, design §10.2 wants idle DecisionBlocks to emit
-// `work.review_requested` targeting Leadership. There is no MCP tool for that
-// yet, so the substrate-visible equivalent is escalating the status (see the
-// TODO in escalateIdleDecisions): a `dits_review_request` tool would let this
-// target Leadership explicitly.
+// Design §10.2 wants idle DecisionBlocks to emit `work.review_requested`
+// targeting Leadership. The `dits_review_request` tool now exists, so
+// escalateIdleDecisions emits a real review request to the leadership role AND
+// transitions the status to escalated — the review routes the decision to
+// Leadership while the status keeps the substrate-visible signal the read-views
+// rely on.
 package scheduler
 
 import (
@@ -56,6 +57,11 @@ const (
 	statusEscalated = "escalated"
 
 	relRelatesTo = "relates_to"
+
+	// roleLeadership is the reviewer role idle decisions escalate to (§10.2).
+	roleLeadership = "leadership"
+	// scopeDecisionIdle labels the review request the scheduler emits.
+	scopeDecisionIdle = "decision_idle"
 )
 
 // Summary reports what a single RunOnce cycle did.
@@ -215,10 +221,10 @@ func (s *Scheduler) markOverdueAssessments(ctx context.Context) (int, error) {
 // escalateIdleDecisions escalates open DecisionBlocks idle past the window
 // (action 3).
 //
-// TODO(§10.2): design wants this to emit work.review_requested targeting
-// Leadership. There is no MCP tool for that yet, so we escalate the status as
-// the substrate-visible equivalent. A dits_review_request tool would let the
-// scheduler target Leadership explicitly.
+// Per §10.2 it emits a real work.review_requested targeting the leadership role
+// (via dits_review_request), then transitions the status to escalated. The
+// review routes the decision to Leadership; the status keeps the
+// substrate-visible signal the read-views rely on.
 func (s *Scheduler) escalateIdleDecisions(ctx context.Context) (int, error) {
 	open, err := s.client.WorkList(ctx, mcp.Filters{Kind: kindDecision, Status: statusOpen})
 	if err != nil {
@@ -239,11 +245,14 @@ func (s *Scheduler) escalateIdleDecisions(ctx context.Context) (int, error) {
 		if updated.After(cutoff) {
 			continue // still fresh
 		}
+		if err := s.client.ReviewRequest(ctx, workRef(d), roleLeadership, scopeDecisionIdle); err != nil {
+			return escalated, fmt.Errorf("request leadership review for %s: %w", workRef(d), err)
+		}
 		if err := s.client.SetStatus(ctx, workRef(d), statusEscalated); err != nil {
 			return escalated, fmt.Errorf("escalate %s: %w", workRef(d), err)
 		}
 		escalated++
-		log.Printf("pilot/scheduler: escalated idle decision_block %s (idle since %s, window %s)", workRef(d), ts, s.DecisionIdle)
+		log.Printf("pilot/scheduler: escalated idle decision_block %s to leadership review (idle since %s, window %s)", workRef(d), ts, s.DecisionIdle)
 	}
 	return escalated, nil
 }

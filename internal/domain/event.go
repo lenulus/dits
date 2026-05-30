@@ -28,18 +28,18 @@ type EventType string
 // --- Lifecycle Events ---
 
 const (
-	EventWorkCreated         EventType = "work.created"
-	EventWorkTitleSet        EventType = "work.title_set"
-	EventWorkBodySet         EventType = "work.body_set"
-	EventWorkStatusSet       EventType = "work.status_set"
-	EventWorkPrioritySet     EventType = "work.priority_set"
-	EventWorkLabelAdded      EventType = "work.label_added"
-	EventWorkLabelRemoved    EventType = "work.label_removed"
-	EventWorkAssigned        EventType = "work.assigned"
-	EventWorkUnassigned      EventType = "work.unassigned"
-	EventWorkCommented       EventType = "work.commented"
-	EventWorkClosed   EventType = "work.closed"
-	EventWorkReopened EventType = "work.reopened"
+	EventWorkCreated      EventType = "work.created"
+	EventWorkTitleSet     EventType = "work.title_set"
+	EventWorkBodySet      EventType = "work.body_set"
+	EventWorkStatusSet    EventType = "work.status_set"
+	EventWorkPrioritySet  EventType = "work.priority_set"
+	EventWorkLabelAdded   EventType = "work.label_added"
+	EventWorkLabelRemoved EventType = "work.label_removed"
+	EventWorkAssigned     EventType = "work.assigned"
+	EventWorkUnassigned   EventType = "work.unassigned"
+	EventWorkCommented    EventType = "work.commented"
+	EventWorkClosed       EventType = "work.closed"
+	EventWorkReopened     EventType = "work.reopened"
 )
 
 // --- Execution / Ownership Events ---
@@ -85,11 +85,11 @@ const (
 // --- Handoff / Review Events ---
 
 const (
-	EventWorkReviewRequested  EventType = "work.review_requested"
-	EventWorkReviewCompleted  EventType = "work.review_completed"
-	EventWorkHandedOff        EventType = "work.handed_off"
-	EventWorkHandoffAccepted  EventType = "work.handoff_accepted"
-	EventWorkHandoffRejected  EventType = "work.handoff_rejected"
+	EventWorkReviewRequested EventType = "work.review_requested"
+	EventWorkReviewCompleted EventType = "work.review_completed"
+	EventWorkHandedOff       EventType = "work.handed_off"
+	EventWorkHandoffAccepted EventType = "work.handoff_accepted"
+	EventWorkHandoffRejected EventType = "work.handoff_rejected"
 )
 
 // --- Eval Events ---
@@ -338,8 +338,12 @@ type DecisionRecordedPayload struct {
 // --- Handoff / Review Payloads ---
 
 type ReviewRequestedPayload struct {
-	ReviewID     ReviewID `json:"review_id"`
-	Reviewer     ActorID  `json:"reviewer,omitempty"`
+	ReviewID ReviewID `json:"review_id"`
+	Reviewer ActorID  `json:"reviewer,omitempty"`
+	// ReviewerRole targets a role rather than a concrete actor (e.g.
+	// "leadership"): the methodology routes the review to whoever holds that
+	// role. Opaque to DITS — a generic role slug, not an RE-specific concept.
+	ReviewerRole string   `json:"reviewer_role,omitempty"`
 	Scope        string   `json:"scope"`
 	ArtifactRefs []string `json:"artifact_refs,omitempty"`
 }

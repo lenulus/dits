@@ -12,6 +12,8 @@ package workops
 
 import (
 	"context"
+	"crypto/ed25519"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -219,6 +221,112 @@ func (w *WorkOps) AppendAndMaterialize(ctx context.Context, workItemID domain.Wo
 		attrs = append(attrs, a)
 	}
 	log.InfoContext(ctx, "event appended", attrs...)
+	return wi, nil
+}
+
+// SubmitSignedEvent appends an externally-signed event. Unlike
+// AppendAndMaterialize it does NOT (re-)sign: the event arrives already signed
+// by some actor's custodial key, and this path VERIFIES that signature against
+// the actor's registered public key before admitting it. This is the
+// per-user/custodial-signing entry point (plan §8.2 / Track F.1): the appended
+// event stays attributed to whoever signed it rather than the project actor.
+//
+// It rejects on: a missing signature, an unknown/keyless actor, an invalid
+// signature, or a protocol-validation failure. On success it appends, re-reduces,
+// and returns the updated WorkItem — mirroring AppendAndMaterialize's tail.
+func (w *WorkOps) SubmitSignedEvent(ctx context.Context, event domain.Event) (*domain.WorkItem, error) {
+	log := w.Logger()
+	if len(event.Signature) == 0 {
+		return nil, fmt.Errorf("submitted event has no signature")
+	}
+	if event.WorkItemID == "" {
+		return nil, fmt.Errorf("submitted event has no work_item_id")
+	}
+	if event.ActorID == "" {
+		return nil, fmt.Errorf("submitted event has no actor_id")
+	}
+
+	// Verify the signature against the actor's REGISTERED public key. An actor
+	// with no registered key cannot submit pre-signed events through this path
+	// (they must actor_register first).
+	pubKeyHex, err := w.Proj.DB.GetActorPublicKey(ctx, event.ActorID)
+	if err != nil {
+		return nil, fmt.Errorf("looking up public key for %s: %w", event.ActorID, err)
+	}
+	if pubKeyHex == "" {
+		return nil, fmt.Errorf("unknown actor %s: no registered public key", event.ActorID)
+	}
+	pubKeyBytes, err := hex.DecodeString(pubKeyHex)
+	if err != nil {
+		return nil, fmt.Errorf("malformed public key for %s: %w", event.ActorID, err)
+	}
+	valid, err := crypto.VerifyEvent(&event, ed25519.PublicKey(pubKeyBytes))
+	if err != nil {
+		return nil, fmt.Errorf("verifying signature for event %s: %w", event.ID, err)
+	}
+	if !valid {
+		log.ErrorContext(ctx, "submitted event rejected: invalid signature",
+			slog.String("type", string(event.Type)),
+			slog.String("work_item", string(event.WorkItemID)),
+			slog.String("event_id", string(event.ID)),
+			slog.String("actor_id", string(event.ActorID)),
+		)
+		return nil, fmt.Errorf("invalid signature on event %s from actor %s", event.ID, event.ActorID)
+	}
+
+	workItemID := event.WorkItemID
+	existing, _ := w.Proj.DB.GetWorkItem(ctx, workItemID)
+	hasEvent := func(key string) bool {
+		allEvents, err := w.Proj.DB.GetEventsForWorkItem(ctx, workItemID)
+		if err != nil {
+			return false
+		}
+		for _, e := range allEvents {
+			evtKey := domain.EventLookupKey(e.Type, string(e.ID))
+			if evtKey == key {
+				return true
+			}
+			if payloadKey := extractPayloadRefKey(e); payloadKey == key {
+				return true
+			}
+		}
+		return false
+	}
+	if err := domain.ValidateProtocolFull(event, existing, hasEvent); err != nil {
+		log.ErrorContext(ctx, "submitted event rejected",
+			slog.String("type", string(event.Type)),
+			slog.String("work_item", string(workItemID)),
+			slog.String("event_id", string(event.ID)),
+			slog.String("actor_id", string(event.ActorID)),
+			slog.Any("err", err),
+		)
+		return nil, err
+	}
+	if err := w.Proj.DB.AppendEvents(ctx, []domain.Event{event}); err != nil {
+		return nil, fmt.Errorf("appending event: %w", err)
+	}
+
+	events, err := w.Proj.DB.GetEventsForWorkItem(ctx, workItemID)
+	if err != nil {
+		return nil, err
+	}
+	ordered := domain.CausalOrder(events)
+	wi, err := domain.Reduce(ordered)
+	if err != nil {
+		return nil, err
+	}
+	if existing != nil && existing.SharedID != "" {
+		wi.SharedID = existing.SharedID
+	}
+	if err := w.Proj.DB.UpsertWorkItem(ctx, wi); err != nil {
+		return nil, err
+	}
+	log.InfoContext(ctx, "signed event submitted",
+		slog.String("type", string(event.Type)),
+		slog.String("work_item", string(workItemID)),
+		slog.String("event_id", string(event.ID)),
+		slog.String("actor_id", string(event.ActorID)),
+	)
 	return wi, nil
 }
 
@@ -701,8 +809,8 @@ func (w *WorkOps) Lease(ctx context.Context, id domain.WorkItemID) (*LeaseResult
 // LeaseReleaseResult carries lease-hold metrics so callers can log how long
 // every lease was held — useful for spotting stuck/abandoned leases.
 type LeaseReleaseResult struct {
-	WorkItem        *domain.WorkItem
-	LeaseDurHeldMs  int64
+	WorkItem       *domain.WorkItem
+	LeaseDurHeldMs int64
 }
 
 func (w *WorkOps) LeaseRelease(ctx context.Context, id domain.WorkItemID, reason string) (*domain.WorkItem, error) {
@@ -862,6 +970,24 @@ func (w *WorkOps) Review(ctx context.Context, id domain.WorkItemID, scope string
 	reviewID := domain.NewReviewID()
 	wi, err := w.simpleEvent(ctx, id, domain.EventWorkReviewRequested,
 		domain.ReviewRequestedPayload{ReviewID: reviewID, Scope: scope}, false)
+	if err != nil {
+		return nil, err
+	}
+	return &ReviewResult{WorkItem: wi, ReviewID: reviewID}, nil
+}
+
+// ReviewRequest emits a work.review_requested targeting a reviewer *role*
+// (e.g. "leadership") rather than a concrete actor. The methodology routes the
+// review to whoever holds that role. reviewerRole is required; scope is a
+// free-form reason (e.g. "decision_idle"). DITS attaches no meaning to either —
+// they ride the generic review payload.
+func (w *WorkOps) ReviewRequest(ctx context.Context, id domain.WorkItemID, reviewerRole, scope string) (*ReviewResult, error) {
+	if reviewerRole == "" {
+		return nil, fmt.Errorf("reviewer_role is required")
+	}
+	reviewID := domain.NewReviewID()
+	wi, err := w.simpleEvent(ctx, id, domain.EventWorkReviewRequested,
+		domain.ReviewRequestedPayload{ReviewID: reviewID, ReviewerRole: reviewerRole, Scope: scope}, false)
 	if err != nil {
 		return nil, err
 	}

@@ -40,6 +40,9 @@ type Store interface {
 	// Cache — persisted indicator values (§10.3).
 	GetCache(ctx context.Context, key string) ([]byte, error)
 	PutCache(ctx context.Context, key string, value []byte) error
+
+	// Close releases the underlying database.
+	Close() error
 }
 
 // stubStore is the Phase-4 no-op Store.
@@ -79,3 +82,5 @@ func (stubStore) GetCache(context.Context, string) ([]byte, error) {
 func (stubStore) PutCache(context.Context, string, []byte) error {
 	return ErrNotImplemented
 }
+
+func (stubStore) Close() error { return nil }

@@ -244,7 +244,9 @@ func (f *fakeClient) TaxonomyNodeSet(context.Context, string, string, json.RawMe
 	return nil
 }
 func (f *fakeClient) ActorRegister(context.Context, string, string, string) error { return nil }
-func (f *fakeClient) Close() error                                                { return nil }
+func (f *fakeClient) ReviewRequest(context.Context, string, string, string) error { return nil }
+func (f *fakeClient) EventSubmit(context.Context, []byte) error                    { return nil }
+func (f *fakeClient) Close() error                                                 { return nil }
 
 func TestCacheRebuild(t *testing.T) {
 	fc := &fakeClient{
