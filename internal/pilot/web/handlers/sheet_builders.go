@@ -7,6 +7,7 @@
 package handlers
 
 import (
+	"fmt"
 	"html/template"
 	"strconv"
 	"strings"
@@ -89,7 +90,11 @@ func portfolioColumns() []web.Column {
 		{Key: "builder", Label: "Builder", Width: 140, Group: "roles", Edit: "actor"},
 		{Key: "pilot", Label: "Pilot", Width: 140, Group: "roles", Edit: "actor"},
 		{Key: "target", Label: "Target", Width: 140, Group: "delivery", Edit: "target"},
+		{Key: "stages", Label: "Stages", Width: 260, Group: "delivery", Readonly: true},
 		{Key: "align", Label: "Alignment", Width: 140, Group: "delivery", Readonly: true},
+		{Key: "statusNarrative", Label: "Status →", Width: 300, Group: "narrative", Readonly: true},
+		{Key: "risks", Label: "Risks", Width: 220, Group: "narrative", Readonly: true},
+		{Key: "nextSteps", Label: "Next", Width: 200, Group: "narrative", Readonly: true},
 		{Key: "visibility", Label: "Visibility", Width: 96, Group: "signals", Edit: "select", Options: visibilityOptions},
 		{Key: "diag", Label: "Diag", Width: 64, Group: "signals", Num: true, Readonly: true},
 	}
@@ -234,23 +239,152 @@ func portfolioRow(m mcp.WorkItem) web.Row {
 	return web.Row{
 		ID: rowID(m),
 		Cells: map[string]web.Cell{
-			"id":         {HTML: idCell(rowID(m))},
-			"title":      {Raw: m.Title},
-			"product":    {HTML: classCell(m, "product")},
-			"org":        {HTML: classCell(m, "org")},
-			"status":     {HTML: statusPill(m.Status)},
-			"ryg":        {HTML: rygPill(m.RYG())},
-			"specAck":    {HTML: ackStatePill(specAck)},
-			"buildAck":   {HTML: ackStatePill(buildAck)},
-			"specifier":  {HTML: actorCell(spec)},
-			"builder":    {HTML: actorCell(build)},
-			"pilot":      {HTML: actorCell(pilot)},
-			"target":     {HTML: targetCell(m.Target(), m.TargetPrecision())},
-			"align":      {HTML: rollupPill(rollup)},
-			"visibility": {HTML: visibilityPill(m.CustomerVisible())},
-			"diag":       {HTML: diagBadge(m)},
+			"id":              {HTML: idCell(rowID(m))},
+			"title":           {Raw: m.Title},
+			"product":         {HTML: classCell(m, "product")},
+			"org":             {HTML: classCell(m, "org")},
+			"status":          {HTML: statusPill(m.Status)},
+			"ryg":             {HTML: rygPill(m.RYG())},
+			"specAck":         {HTML: ackStatePill(specAck)},
+			"buildAck":        {HTML: ackStatePill(buildAck)},
+			"specifier":       {HTML: actorCell(spec)},
+			"builder":         {HTML: actorCell(build)},
+			"pilot":           {HTML: actorCell(pilot)},
+			"target":          {HTML: targetCell(m.Target(), m.TargetPrecision())},
+			"stages":          {HTML: stagesCell(m.Stages)},
+			"align":           {HTML: rollupPill(rollup)},
+			"statusNarrative": {HTML: statusNarrativeCell(m)},
+			"risks":           {HTML: risksCell(m.Risks())},
+			"nextSteps":       {HTML: nextCell(m.NextSteps())},
+			"visibility":      {HTML: visibilityPill(m.CustomerVisible())},
+			"diag":            {HTML: diagBadge(m)},
+
+			// Collapsed-group summaries (rendered in the single summary column
+			// when a group folds; mirror views.jsx PORTFOLIO_GROUPS.summary).
+			"__group_classification": {HTML: classCell(m, "product")},
+			"__group_health":         {HTML: healthSummary(m)},
+			"__group_acks":           {HTML: rollupPill(rollup)},
+			"__group_roles":          {HTML: roleStack(spec, build, pilot)},
+			"__group_delivery":       {HTML: targetCell(m.Target(), m.TargetPrecision())},
+			"__group_narrative":      {HTML: narrativeSummary(m)},
+			"__group_signals":        {HTML: signalsSummary(m)},
 		},
 	}
+}
+
+// --- collapsed-group summary + cell renderers (mirror views.jsx) ---
+
+// healthSummary: RYG pill + a muted status label (Health group, collapsed).
+func healthSummary(m mcp.WorkItem) template.HTML {
+	return template.HTML(`<span style="display:inline-flex;align-items:center;gap:6px">` +
+		string(rygPill(m.RYG())) +
+		`<span style="font-family:var(--font-mono);font-size:10px;color:var(--ink-3)">` +
+		template.HTMLEscapeString(statusLabel(m.Status)) + `</span></span>`)
+}
+
+// roleStack: the Specifier/Builder/Pilot avatars side by side (Roles group).
+func roleStack(spec, build, pilot string) template.HTML {
+	return template.HTML(`<span class="role-stack">` +
+		string(avatarHTML(spec)) + string(avatarHTML(build)) + string(avatarHTML(pilot)) + `</span>`)
+}
+
+// narrativeSummary: status-present dot + risk/next counts (Updates group).
+func narrativeSummary(m mcp.WorkItem) template.HTML {
+	nr, nn := len(m.Risks()), len(m.NextSteps())
+	statusColor := "var(--ink-5)"
+	if m.StatusNarrative() != "" {
+		statusColor = "var(--accent)"
+	}
+	riskColor := "var(--ink-5)"
+	if nr > 0 {
+		riskColor = "var(--ryg-yellow-ink)"
+	}
+	nextColor := "var(--ink-5)"
+	if nn > 0 {
+		nextColor = "var(--ink-1)"
+	}
+	return template.HTML(fmt.Sprintf(
+		`<span style="display:inline-flex;align-items:center;gap:8px;font-family:var(--font-mono);font-size:10.5px;color:var(--ink-3)">`+
+			`<span style="color:%s">&#9679; status</span>`+
+			`<span style="color:%s">%d risk%s</span>`+
+			`<span style="color:%s">%d next</span></span>`,
+		statusColor, riskColor, nr, plur(nr), nextColor, nn))
+}
+
+// signalsSummary: diagnostics badge + visibility pill (Signals group).
+func signalsSummary(m mcp.WorkItem) template.HTML {
+	return template.HTML(`<span style="display:inline-flex;align-items:center;gap:6px">` +
+		string(diagBadge(m)) + string(visibilityPill(m.CustomerVisible())) + `</span>`)
+}
+
+// stagesCell: the mini staged-timeline (Dogfood/Beta/GA dots + dates).
+func stagesCell(stages []mcp.Stage) template.HTML {
+	if len(stages) == 0 {
+		return template.HTML(`<span class="placeholder">no stages</span>`)
+	}
+	var b strings.Builder
+	b.WriteString(`<span class="stages">`)
+	for _, s := range stages {
+		state := s.State
+		if state == "" {
+			state = "open"
+		}
+		fmt.Fprintf(&b, `<span class="stage stage--%s"><span class="stage__dot"></span><span class="stage__lab">%s</span><span class="stage__when">%s</span></span>`,
+			template.HTMLEscapeString(state), template.HTMLEscapeString(s.Label),
+			template.HTMLEscapeString(formatTarget(s.Date, s.Precision)))
+	}
+	b.WriteString(`</span>`)
+	return template.HTML(b.String())
+}
+
+// statusNarrativeCell: the status paragraph + who/when (read-only in the grid;
+// edit it from the panel Status tab).
+func statusNarrativeCell(m mcp.WorkItem) template.HTML {
+	narr := m.StatusNarrative()
+	if narr == "" {
+		return template.HTML(`<span class="placeholder">no status yet</span>`)
+	}
+	when := m.StatusUpdatedAt()
+	if len(when) > 10 {
+		when = when[:10]
+	}
+	return template.HTML(`<span style="display:inline-flex;flex-direction:column;min-width:0;line-height:1.2">` +
+		`<span style="font-size:12px;color:var(--ink-1);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">` +
+		template.HTMLEscapeString(narr) + `</span>` +
+		`<span style="font-family:var(--font-mono);font-size:9.5px;color:var(--ink-4)">` +
+		template.HTMLEscapeString(when) + `</span></span>`)
+}
+
+// risksCell: count badge + first risk body (Risks column).
+func risksCell(risks []mcp.Risk) template.HTML {
+	if len(risks) == 0 {
+		return template.HTML(`<span class="placeholder">—</span>`)
+	}
+	high := 0
+	for _, r := range risks {
+		if r.Severity == "high" {
+			high++
+		}
+	}
+	cls := "dx-diag-count"
+	if high > 0 {
+		cls += " dx-diag-count--violation"
+	}
+	return template.HTML(fmt.Sprintf(
+		`<span style="display:inline-flex;align-items:center;gap:6px;min-width:0"><span class="%s">%d</span>`+
+			`<span style="font-family:var(--font-serif);font-style:italic;font-size:12px;color:var(--ink-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">%s</span></span>`,
+		cls, len(risks), template.HTMLEscapeString(risks[0].Body)))
+}
+
+// nextCell: count badge + first next-step body (Next column).
+func nextCell(next []mcp.NextStep) template.HTML {
+	if len(next) == 0 {
+		return template.HTML(`<span class="placeholder">—</span>`)
+	}
+	return template.HTML(fmt.Sprintf(
+		`<span style="display:inline-flex;align-items:center;gap:6px;min-width:0"><span class="dx-diag-count" style="background:var(--accent)">%d</span>`+
+			`<span style="font-family:var(--font-serif);font-style:italic;font-size:12px;color:var(--ink-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">%s</span></span>`,
+		len(next), template.HTMLEscapeString(next[0].Body)))
 }
 
 // --- group-by ---
