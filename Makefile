@@ -1,4 +1,4 @@
-.PHONY: build build-cli build-server build-mcp test vet fmt clean release
+.PHONY: build build-cli build-server build-mcp build-pilot test vet fmt clean release
 
 BIN_DIR := bin
 DIST_DIR := dist
@@ -13,7 +13,7 @@ RELEASE_PLATFORMS := \
 	windows/amd64 \
 	windows/arm64
 
-build: build-cli build-server build-mcp
+build: build-cli build-server build-mcp build-pilot
 
 build-cli:
 	go build -o $(BIN_DIR)/dits ./cmd/dits
@@ -23,6 +23,9 @@ build-server:
 
 build-mcp:
 	go build -o $(BIN_DIR)/dits-mcp ./cmd/dits-mcp
+
+build-pilot:
+	go build -o $(BIN_DIR)/pilot ./cmd/pilot
 
 test:
 	go test ./...
