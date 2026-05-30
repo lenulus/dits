@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
+	"strings"
 	"time"
 
+	"github.com/lenulus/pf/internal/constraints"
 	"github.com/lenulus/pf/internal/domain"
 	"github.com/lenulus/pf/internal/logging"
 	"github.com/lenulus/pf/internal/store"
@@ -195,17 +197,99 @@ func resolveID(ctx context.Context, w *workops.WorkOps, req mcp.CallToolRequest)
 	return wi.ID, nil, nil
 }
 
+// hasRoleBinding reports whether the work item has a binding for role; if
+// actor is non-empty it must also match the bound actor.
+func hasRoleBinding(wi domain.WorkItem, role, actor string) bool {
+	for _, rb := range wi.RoleBindings {
+		if rb.RoleSlug == role {
+			return actor == "" || string(rb.Actor) == actor
+		}
+	}
+	return false
+}
+
+// hasClassification reports whether the work item is classified in taxonomy;
+// if node is non-empty the classification node must have it as a slug prefix.
+func hasClassification(wi domain.WorkItem, taxonomy, node string) bool {
+	for _, cl := range wi.Classifications {
+		if cl.TaxonomySlug != taxonomy {
+			continue
+		}
+		if node == "" || strings.HasPrefix(cl.NodeSlug, node) {
+			return true
+		}
+	}
+	return false
+}
+
+// latestAckRollup returns the alignment rollup of the most recently filed ACK
+// on the work item, or "" if there is none.
+func latestAckRollup(wi domain.WorkItem) domain.AckRollup {
+	if len(wi.Acks) == 0 {
+		return ""
+	}
+	latest := wi.Acks[0]
+	for _, a := range wi.Acks[1:] {
+		if a.FiledAt.After(latest.FiledAt) {
+			latest = a
+		}
+	}
+	return domain.ComputeAckRollup(latest.Specifier, latest.Builder)
+}
+
+// paginate applies offset then limit to a slice. offset/limit <= 0 are no-ops
+// for that dimension.
+func paginate(items []domain.WorkItem, offset, limit int) []domain.WorkItem {
+	if offset > 0 {
+		if offset >= len(items) {
+			return []domain.WorkItem{}
+		}
+		items = items[offset:]
+	}
+	if limit > 0 && limit < len(items) {
+		items = items[:limit]
+	}
+	return items
+}
+
+// applyMetaMutation loads the current meta, applies a mutation that is
+// expected to bump Version, and saves it conditionally on the prior version
+// (optimistic concurrency). Returns the saved meta as the tool result.
+func applyMetaMutation(ctx context.Context, w *workops.WorkOps, mutate func(*domain.MetaConfig) error) (*mcp.CallToolResult, error) {
+	meta, err := w.LoadMeta(ctx)
+	if err != nil {
+		return errResult(err)
+	}
+	prevVersion := meta.Version
+	if err := mutate(meta); err != nil {
+		return errResult(err)
+	}
+	if err := w.Proj.DB.SaveMetaIfVersion(ctx, meta, prevVersion); err != nil {
+		return errResult(err)
+	}
+	return jsonResult(meta)
+}
+
 func registerTools(s *server.MCPServer, cfg Config) {
 	// ---------- Read-only tools ----------
 
 	s.AddTool(mcp.NewTool("dits_work_list",
-		mcp.WithDescription("List work items with optional filters (status, kind, ready, include_closed)."),
+		mcp.WithDescription("List work items with optional filters (status, kind, ready, include_closed, "+
+			"role/role_actor, taxonomy/node, alignment, limit/offset)."),
 		mcp.WithString("status", mcp.Description("Filter by status")),
 		mcp.WithString("kind", mcp.Description("Filter by kind")),
 		mcp.WithBoolean("ready", mcp.Description("Only items that are ready (unleased, unblocked, open)")),
 		mcp.WithString("claimed_by", mcp.Description("Filter by lease holder actor ID")),
 		mcp.WithBoolean("blocked", mcp.Description("Filter by blocked state")),
 		mcp.WithBoolean("include_closed", mcp.Description("Include closed items")),
+		mcp.WithString("role", mcp.Description("Filter to items with a binding for this role slug")),
+		mcp.WithString("role_actor", mcp.Description("With role: require this actor bound to that role")),
+		mcp.WithString("taxonomy", mcp.Description("Filter to items classified in this taxonomy")),
+		mcp.WithString("node", mcp.Description("With taxonomy: prefix-match classification node slug")),
+		mcp.WithString("alignment", mcp.Description("Filter by latest ACK rollup: aligned | builder_pending | "+
+			"specifier_pending | both_pending | rejected")),
+		mcp.WithNumber("limit", mcp.Description("Max items to return (applied after filtering)")),
+		mcp.WithNumber("offset", mcp.Description("Skip this many items before limit")),
 		readOnly(),
 	), withOps(cfg, func(ctx context.Context, w *workops.WorkOps, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		filter := store.WorkItemFilter{
@@ -223,6 +307,11 @@ func registerTools(s *server.MCPServer, cfg Config) {
 		if _, ok := req.GetArguments()["blocked"]; ok {
 			gotBlockedFlag = true
 		}
+		role := req.GetString("role", "")
+		roleActor := req.GetString("role_actor", "")
+		taxonomy := req.GetString("taxonomy", "")
+		node := req.GetString("node", "")
+		alignment := req.GetString("alignment", "")
 
 		// When ready=true, defer to the canonical domain.IsReady contract
 		// (blocked + leased + running-attempt + open-status checks). The
@@ -251,8 +340,18 @@ func registerTools(s *server.MCPServer, cfg Config) {
 			if gotBlockedFlag && wi.Blocked != wantBlocked {
 				continue
 			}
+			if role != "" && !hasRoleBinding(wi, role, roleActor) {
+				continue
+			}
+			if taxonomy != "" && !hasClassification(wi, taxonomy, node) {
+				continue
+			}
+			if alignment != "" && string(latestAckRollup(wi)) != alignment {
+				continue
+			}
 			out = append(out, wi)
 		}
+		out = paginate(out, int(req.GetFloat("offset", 0)), int(req.GetFloat("limit", 0)))
 		if out == nil {
 			out = []domain.WorkItem{}
 		}
@@ -317,6 +416,92 @@ func registerTools(s *server.MCPServer, cfg Config) {
 			"actor_id":    w.Proj.Config.ActorID,
 			"project_key": w.Proj.Config.ProjectKey,
 		})
+	}))
+
+	s.AddTool(mcp.NewTool("dits_role_bindings_list",
+		mcp.WithDescription("List the role bindings (role -> actor) materialized on a work item."),
+		mcp.WithString("id", mcp.Description("Work item ID or shared ID"), mcp.Required()),
+		readOnly(),
+	), withOps(cfg, func(ctx context.Context, w *workops.WorkOps, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		wi, err := w.ResolveWorkItem(ctx, req.GetString("id", ""))
+		if err != nil {
+			return errResult(err)
+		}
+		bindings := wi.RoleBindings
+		if bindings == nil {
+			bindings = []domain.RoleBinding{}
+		}
+		return jsonResult(bindings)
+	}))
+
+	s.AddTool(mcp.NewTool("dits_diagnostics_get",
+		mcp.WithDescription("Evaluate role constraints against a work item and return diagnostics. "+
+			"NOTE: actor org positions are not yet stored in the substrate, so this passes "+
+			"nil positions — only position-free predicates fire (distinct_actors, "+
+			"requires_classification). Hierarchy predicates (not_reports_to_within, "+
+			"classified_in_same_node) need actor positions and stay silent until that store lands "+
+			"(design open-question #2)."),
+		mcp.WithString("id", mcp.Description("Work item ID or shared ID"), mcp.Required()),
+		readOnly(),
+	), withOps(cfg, func(ctx context.Context, w *workops.WorkOps, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		wi, err := w.ResolveWorkItem(ctx, req.GetString("id", ""))
+		if err != nil {
+			return errResult(err)
+		}
+		meta, err := w.LoadMeta(ctx)
+		if err != nil {
+			return errResult(err)
+		}
+		// nil ActorPositions: the substrate has no actor->org-node store yet, so
+		// hierarchy-aware predicates are intentionally skipped (open-question #2).
+		diags := constraints.Evaluate(wi, meta, nil)
+		if diags == nil {
+			diags = []domain.Diagnostic{}
+		}
+		return jsonResult(diags)
+	}))
+
+	s.AddTool(mcp.NewTool("dits_events_list",
+		mcp.WithDescription("Read the global event log across all work items (EventLogView), "+
+			"optionally filtered by type and a since-timestamp (RFC3339). group_by is deferred."),
+		mcp.WithString("type", mcp.Description("Filter by event type, e.g. work.role_bound")),
+		mcp.WithString("since", mcp.Description("Only events strictly after this RFC3339 timestamp")),
+		mcp.WithNumber("limit", mcp.Description("Max events to return (default 100)")),
+		readOnly(),
+	), withOps(cfg, func(ctx context.Context, w *workops.WorkOps, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		filter := store.EventFilter{
+			Type:  domain.EventType(req.GetString("type", "")),
+			Limit: int(req.GetFloat("limit", 0)),
+		}
+		if s := req.GetString("since", ""); s != "" {
+			ts, err := time.Parse(time.RFC3339, s)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("invalid since timestamp: %v", err)), nil
+			}
+			filter.Since = ts
+		}
+		events, err := w.Proj.DB.ListEvents(ctx, filter)
+		if err != nil {
+			return errResult(err)
+		}
+		if events == nil {
+			events = []domain.Event{}
+		}
+		return jsonResult(events)
+	}))
+
+	s.AddTool(mcp.NewTool("dits_actor_list",
+		mcp.WithDescription("List registered actors (actor_id, public_key, node_id, first_seen)."),
+		readOnly(),
+	), withOps(cfg, func(ctx context.Context, w *workops.WorkOps, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		actors, err := w.Proj.DB.ListActors(ctx)
+		if err != nil {
+			return errResult(err)
+		}
+		if actors == nil {
+			actors = []store.ActorRecord{}
+		}
+		return jsonResult(actors)
 	}))
 
 	// ---------- Mutating tools ----------
@@ -743,6 +928,246 @@ func registerTools(s *server.MCPServer, cfg Config) {
 			return errResult(err)
 		}
 		return jsonResult(wi)
+	}))
+
+	// ---------- Classification & role bindings ----------
+
+	s.AddTool(mcp.NewTool("dits_work_classify",
+		mcp.WithDescription("Classify a work item within a taxonomy node."),
+		mcp.WithString("id", mcp.Required()),
+		mcp.WithString("taxonomy", mcp.Required(), mcp.Description("Taxonomy slug, e.g. org / product")),
+		mcp.WithString("node", mcp.Required(), mcp.Description("Node slug within the taxonomy")),
+	), withOps(cfg, func(ctx context.Context, w *workops.WorkOps, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		id, errR, _ := resolveID(ctx, w, req)
+		if errR != nil {
+			return errR, nil
+		}
+		wi, err := w.Classify(ctx, id, req.GetString("taxonomy", ""), req.GetString("node", ""))
+		if err != nil {
+			return errResult(err)
+		}
+		return jsonResult(wi)
+	}))
+
+	s.AddTool(mcp.NewTool("dits_work_declassify",
+		mcp.WithDescription("Remove a classification from a work item."),
+		mcp.WithString("id", mcp.Required()),
+		mcp.WithString("taxonomy", mcp.Required()),
+		mcp.WithString("node", mcp.Required()),
+	), withOps(cfg, func(ctx context.Context, w *workops.WorkOps, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		id, errR, _ := resolveID(ctx, w, req)
+		if errR != nil {
+			return errR, nil
+		}
+		wi, err := w.Declassify(ctx, id, req.GetString("taxonomy", ""), req.GetString("node", ""))
+		if err != nil {
+			return errResult(err)
+		}
+		return jsonResult(wi)
+	}))
+
+	s.AddTool(mcp.NewTool("dits_work_role_bind",
+		mcp.WithDescription("Bind an actor to a named role on a work item. Re-binding the same role replaces the actor."),
+		mcp.WithString("id", mcp.Required()),
+		mcp.WithString("role", mcp.Required(), mcp.Description("Role slug, e.g. specifier / builder / pilot")),
+		mcp.WithString("actor", mcp.Required(), mcp.Description("Actor ID to bind")),
+	), withOps(cfg, func(ctx context.Context, w *workops.WorkOps, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		id, errR, _ := resolveID(ctx, w, req)
+		if errR != nil {
+			return errR, nil
+		}
+		wi, err := w.BindRole(ctx, id, req.GetString("role", ""), domain.ActorID(req.GetString("actor", "")))
+		if err != nil {
+			return errResult(err)
+		}
+		return jsonResult(wi)
+	}))
+
+	s.AddTool(mcp.NewTool("dits_work_role_unbind",
+		mcp.WithDescription("Remove a role binding from a work item."),
+		mcp.WithString("id", mcp.Required()),
+		mcp.WithString("role", mcp.Required()),
+		mcp.WithString("actor", mcp.Required()),
+	), withOps(cfg, func(ctx context.Context, w *workops.WorkOps, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		id, errR, _ := resolveID(ctx, w, req)
+		if errR != nil {
+			return errR, nil
+		}
+		wi, err := w.UnbindRole(ctx, id, req.GetString("role", ""), domain.ActorID(req.GetString("actor", "")))
+		if err != nil {
+			return errResult(err)
+		}
+		return jsonResult(wi)
+	}))
+
+	// ---------- ACK lifecycle ----------
+
+	s.AddTool(mcp.NewTool("dits_ack_file",
+		mcp.WithDescription("File a two-party commitment (ACK) on a work item for bilateral acceptance."),
+		mcp.WithString("id", mcp.Required()),
+		mcp.WithString("scope_summary", mcp.Required()),
+		mcp.WithString("delivery_timing"),
+		mcp.WithString("target_outcome"),
+		mcp.WithString("acceptance_criteria"),
+	), withOps(cfg, func(ctx context.Context, w *workops.WorkOps, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		id, errR, _ := resolveID(ctx, w, req)
+		if errR != nil {
+			return errR, nil
+		}
+		wi, err := w.AckFile(ctx, id,
+			req.GetString("scope_summary", ""),
+			req.GetString("delivery_timing", ""),
+			req.GetString("target_outcome", ""),
+			req.GetString("acceptance_criteria", ""),
+		)
+		if err != nil {
+			return errResult(err)
+		}
+		return jsonResult(wi)
+	}))
+
+	s.AddTool(mcp.NewTool("dits_ack_accept",
+		mcp.WithDescription("Record that one side (specifier|builder) stands behind the current commitment."),
+		mcp.WithString("id", mcp.Required()),
+		mcp.WithString("who", mcp.Required(), mcp.Description("specifier | builder")),
+		mcp.WithString("note"),
+	), withOps(cfg, func(ctx context.Context, w *workops.WorkOps, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		id, errR, _ := resolveID(ctx, w, req)
+		if errR != nil {
+			return errR, nil
+		}
+		wi, err := w.AckAccept(ctx, id, req.GetString("who", ""), req.GetString("note", ""))
+		if err != nil {
+			return errResult(err)
+		}
+		return jsonResult(wi)
+	}))
+
+	s.AddTool(mcp.NewTool("dits_ack_reject",
+		mcp.WithDescription("Record that one side (specifier|builder) rejects the current commitment."),
+		mcp.WithString("id", mcp.Required()),
+		mcp.WithString("who", mcp.Required(), mcp.Description("specifier | builder")),
+		mcp.WithString("note"),
+	), withOps(cfg, func(ctx context.Context, w *workops.WorkOps, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		id, errR, _ := resolveID(ctx, w, req)
+		if errR != nil {
+			return errR, nil
+		}
+		wi, err := w.AckReject(ctx, id, req.GetString("who", ""), req.GetString("note", ""))
+		if err != nil {
+			return errResult(err)
+		}
+		return jsonResult(wi)
+	}))
+
+	s.AddTool(mcp.NewTool("dits_ack_amend",
+		mcp.WithDescription("Amend the current commitment. A material amendment (scope_change|timeline_change|"+
+			"target_change) after acceptance auto-clears both sides to pending; clarification never clears."),
+		mcp.WithString("id", mcp.Required()),
+		mcp.WithString("amendment_type", mcp.Required(),
+			mcp.Description("scope_change | timeline_change | target_change | clarification")),
+		mcp.WithArray("fields", mcp.WithStringItems(), mcp.Description("Which commitment fields changed")),
+		mcp.WithString("reason"),
+	), withOps(cfg, func(ctx context.Context, w *workops.WorkOps, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		id, errR, _ := resolveID(ctx, w, req)
+		if errR != nil {
+			return errR, nil
+		}
+		wi, err := w.AckAmend(ctx, id,
+			req.GetString("amendment_type", ""),
+			req.GetStringSlice("fields", nil),
+			req.GetString("reason", ""),
+		)
+		if err != nil {
+			return errResult(err)
+		}
+		return jsonResult(wi)
+	}))
+
+	// ---------- Identity ----------
+
+	s.AddTool(mcp.NewTool("dits_actor_register",
+		mcp.WithDescription("Register (or update) an actor's public key and optional node ID."),
+		mcp.WithString("actor_id", mcp.Required()),
+		mcp.WithString("public_key", mcp.Required()),
+		mcp.WithString("node_id"),
+	), withOps(cfg, func(ctx context.Context, w *workops.WorkOps, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		actorID := req.GetString("actor_id", "")
+		if actorID == "" {
+			return mcp.NewToolResultError("actor_id is required"), nil
+		}
+		if err := w.Proj.DB.RegisterActor(ctx, domain.ActorID(actorID),
+			req.GetString("public_key", ""), domain.NodeID(req.GetString("node_id", ""))); err != nil {
+			return errResult(err)
+		}
+		return jsonResult(map[string]any{"registered": actorID})
+	}))
+
+	// ---------- Meta administration ----------
+
+	s.AddTool(mcp.NewTool("dits_meta_apply",
+		mcp.WithDescription("Replace the project meta with the supplied MetaConfig JSON, saved at the next "+
+			"version. NOTE: this is a full replace; Phase 6 will refine to a diff-apply."),
+		mcp.WithString("meta_json", mcp.Required(), mcp.Description("A full domain.MetaConfig as a JSON string")),
+	), withOps(cfg, func(ctx context.Context, w *workops.WorkOps, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		raw := req.GetString("meta_json", "")
+		if raw == "" {
+			return mcp.NewToolResultError("meta_json is required"), nil
+		}
+		var next domain.MetaConfig
+		if err := json.Unmarshal([]byte(raw), &next); err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("invalid meta_json: %v", err)), nil
+		}
+		cur, err := w.LoadMeta(ctx)
+		if err != nil {
+			return errResult(err)
+		}
+		next.Version = cur.Version + 1
+		if next.ProjectKey == "" {
+			next.ProjectKey = cur.ProjectKey
+		}
+		if err := w.Proj.DB.SaveMeta(ctx, &next); err != nil {
+			return errResult(err)
+		}
+		return jsonResult(&next)
+	}))
+
+	s.AddTool(mcp.NewTool("dits_taxonomy_node_add",
+		mcp.WithDescription("Add a node to an existing taxonomy in meta (bumps meta version)."),
+		mcp.WithString("taxonomy", mcp.Required()),
+		mcp.WithString("slug", mcp.Required()),
+		mcp.WithString("name", mcp.Required()),
+		mcp.WithString("parent_slug"),
+	), withOps(cfg, func(ctx context.Context, w *workops.WorkOps, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		return applyMetaMutation(ctx, w, func(m *domain.MetaConfig) error {
+			return m.AddTaxonomyNode(req.GetString("taxonomy", ""), domain.TaxonomyNode{
+				Slug:       req.GetString("slug", ""),
+				Name:       req.GetString("name", ""),
+				ParentSlug: req.GetString("parent_slug", ""),
+			})
+		})
+	}))
+
+	s.AddTool(mcp.NewTool("dits_taxonomy_node_move",
+		mcp.WithDescription("Re-parent a taxonomy node in meta (bumps meta version)."),
+		mcp.WithString("taxonomy", mcp.Required()),
+		mcp.WithString("slug", mcp.Required()),
+		mcp.WithString("new_parent_slug", mcp.Description("New parent slug; empty makes it a root node")),
+	), withOps(cfg, func(ctx context.Context, w *workops.WorkOps, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		return applyMetaMutation(ctx, w, func(m *domain.MetaConfig) error {
+			return m.MoveTaxonomyNode(req.GetString("taxonomy", ""),
+				req.GetString("slug", ""), req.GetString("new_parent_slug", ""))
+		})
+	}))
+
+	s.AddTool(mcp.NewTool("dits_taxonomy_node_retire",
+		mcp.WithDescription("Retire a taxonomy node so new classifications can no longer target it (bumps meta version)."),
+		mcp.WithString("taxonomy", mcp.Required()),
+		mcp.WithString("slug", mcp.Required()),
+	), withOps(cfg, func(ctx context.Context, w *workops.WorkOps, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		return applyMetaMutation(ctx, w, func(m *domain.MetaConfig) error {
+			return m.RetireTaxonomyNode(req.GetString("taxonomy", ""), req.GetString("slug", ""))
+		})
 	}))
 
 	// ---------- Sync tool ----------

@@ -68,6 +68,15 @@ func (s *Store) migrate() error {
 	s.addColumnIfNotExists("work_items", "lease_id", "TEXT")
 	s.addColumnIfNotExists("work_items", "lease_generation", "INTEGER DEFAULT 0")
 
+	// RE substrate / ACK collections are stored as JSON blobs on the row.
+	// These collections are small, queried as whole sets, and have no
+	// independent indexing needs, so a JSON column is simpler than a child
+	// table per collection (consistent with how produced_by/metrics are
+	// stored as JSON elsewhere).
+	s.addColumnIfNotExists("work_items", "acks_json", "TEXT")
+	s.addColumnIfNotExists("work_items", "classifications_json", "TEXT")
+	s.addColumnIfNotExists("work_items", "role_bindings_json", "TEXT")
+
 	return nil
 }
 
@@ -523,7 +532,29 @@ func (s *Store) UpsertWorkItem(ctx context.Context, wi *domain.WorkItem) error {
 		}
 	}
 
+	// RE substrate / ACK collections, stored as JSON blobs on the row. nil/empty
+	// collections serialize to "[]" so reads round-trip to empty slices.
+	acksJSON := marshalJSONColumn(wi.Acks)
+	classificationsJSON := marshalJSONColumn(wi.Classifications)
+	roleBindingsJSON := marshalJSONColumn(wi.RoleBindings)
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE work_items SET acks_json = ?, classifications_json = ?, role_bindings_json = ? WHERE id = ?`,
+		acksJSON, classificationsJSON, roleBindingsJSON, wi.ID,
+	); err != nil {
+		return err
+	}
+
 	return tx.Commit()
+}
+
+// marshalJSONColumn marshals a collection for storage in a JSON text column,
+// returning "[]" on a nil/empty slice or any marshal error.
+func marshalJSONColumn(v any) string {
+	data, err := json.Marshal(v)
+	if err != nil {
+		return "[]"
+	}
+	return string(data)
 }
 
 func (s *Store) GetWorkItem(ctx context.Context, id domain.WorkItemID) (*domain.WorkItem, error) {
@@ -1146,6 +1177,26 @@ func (s *Store) loadWorkItemCollections(ctx context.Context, wi *domain.WorkItem
 		wi.Outcomes = append(wi.Outcomes, oc)
 	}
 
+	// RE substrate / ACK collections, read from the JSON columns on the row.
+	wi.Acks = []domain.Ack{}
+	wi.Classifications = []domain.Classification{}
+	wi.RoleBindings = []domain.RoleBinding{}
+	var acksJSON, classificationsJSON, roleBindingsJSON sql.NullString
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT acks_json, classifications_json, role_bindings_json FROM work_items WHERE id = ?`, wi.ID,
+	).Scan(&acksJSON, &classificationsJSON, &roleBindingsJSON); err != nil && err != sql.ErrNoRows {
+		return err
+	}
+	if acksJSON.Valid && acksJSON.String != "" {
+		_ = json.Unmarshal([]byte(acksJSON.String), &wi.Acks)
+	}
+	if classificationsJSON.Valid && classificationsJSON.String != "" {
+		_ = json.Unmarshal([]byte(classificationsJSON.String), &wi.Classifications)
+	}
+	if roleBindingsJSON.Valid && roleBindingsJSON.String != "" {
+		_ = json.Unmarshal([]byte(roleBindingsJSON.String), &wi.RoleBindings)
+	}
+
 	return nil
 }
 
@@ -1262,6 +1313,39 @@ func (s *Store) GetActorPublicKey(ctx context.Context, actorID domain.ActorID) (
 		return "", nil
 	}
 	return pubKey, err
+}
+
+func (s *Store) ListActors(ctx context.Context) ([]store.ActorRecord, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT actor_id, public_key, node_id, first_seen FROM actors ORDER BY actor_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var actors []store.ActorRecord
+	for rows.Next() {
+		var (
+			rec       store.ActorRecord
+			nodeID    sql.NullString
+			firstSeen string
+		)
+		if err := rows.Scan(&rec.ActorID, &rec.PublicKey, &nodeID, &firstSeen); err != nil {
+			return nil, err
+		}
+		if nodeID.Valid {
+			rec.NodeID = domain.NodeID(nodeID.String)
+		}
+		// first_seen defaults to strftime millis (no nanos); fall back to the
+		// nano layout for rows written by other paths.
+		if t, perr := time.Parse("2006-01-02T15:04:05.999Z", firstSeen); perr == nil {
+			rec.FirstSeen = t
+		} else {
+			rec.FirstSeen, _ = time.Parse(time.RFC3339Nano, firstSeen)
+		}
+		actors = append(actors, rec)
+	}
+	return actors, rows.Err()
 }
 
 // --- OverlayStore ---

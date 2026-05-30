@@ -58,9 +58,18 @@ type MetaStore interface {
 
 var ErrMetaConflict = fmt.Errorf("meta version conflict: not at HEAD")
 
+// ActorRecord is a registered actor's stored identity.
+type ActorRecord struct {
+	ActorID   domain.ActorID `json:"actor_id"`
+	PublicKey string         `json:"public_key"`
+	NodeID    domain.NodeID  `json:"node_id,omitempty"`
+	FirstSeen time.Time      `json:"first_seen"`
+}
+
 type ActorStore interface {
 	RegisterActor(ctx context.Context, actorID domain.ActorID, publicKey string, nodeID domain.NodeID) error
 	GetActorPublicKey(ctx context.Context, actorID domain.ActorID) (string, error)
+	ListActors(ctx context.Context) ([]ActorRecord, error)
 }
 
 type SyncStore interface {

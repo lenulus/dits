@@ -422,6 +422,65 @@ func (m *MetaConfig) AddRoleConstraint(c RoleConstraint) error {
 	return nil
 }
 
+// AddTaxonomyNode adds a node to an existing taxonomy. The parent (if given)
+// must already exist within the same taxonomy. Bumps Version.
+func (m *MetaConfig) AddTaxonomyNode(taxSlug string, node TaxonomyNode) error {
+	tx := m.GetTaxonomy(taxSlug)
+	if tx == nil {
+		return fmt.Errorf("taxonomy %q not found", taxSlug)
+	}
+	if m.TaxonomyHasNode(taxSlug, node.Slug) {
+		return fmt.Errorf("node %q already exists in taxonomy %q", node.Slug, taxSlug)
+	}
+	if node.ParentSlug != "" && !m.TaxonomyHasNode(taxSlug, node.ParentSlug) {
+		return fmt.Errorf("parent node %q not found in taxonomy %q", node.ParentSlug, taxSlug)
+	}
+	tx.Nodes = append(tx.Nodes, node)
+	m.Version++
+	return nil
+}
+
+// MoveTaxonomyNode re-parents an existing node. The new parent must exist and
+// must not be the node itself. Bumps Version.
+func (m *MetaConfig) MoveTaxonomyNode(taxSlug, slug, newParentSlug string) error {
+	tx := m.GetTaxonomy(taxSlug)
+	if tx == nil {
+		return fmt.Errorf("taxonomy %q not found", taxSlug)
+	}
+	if slug == newParentSlug {
+		return fmt.Errorf("node %q cannot be its own parent", slug)
+	}
+	if newParentSlug != "" && !m.TaxonomyHasNode(taxSlug, newParentSlug) {
+		return fmt.Errorf("parent node %q not found in taxonomy %q", newParentSlug, taxSlug)
+	}
+	for i := range tx.Nodes {
+		if tx.Nodes[i].Slug == slug {
+			tx.Nodes[i].ParentSlug = newParentSlug
+			m.Version++
+			return nil
+		}
+	}
+	return fmt.Errorf("node %q not found in taxonomy %q", slug, taxSlug)
+}
+
+// RetireTaxonomyNode marks a node retired so it can no longer be the target of
+// new classifications (existing classifications and declassify still resolve).
+// Bumps Version.
+func (m *MetaConfig) RetireTaxonomyNode(taxSlug, slug string) error {
+	tx := m.GetTaxonomy(taxSlug)
+	if tx == nil {
+		return fmt.Errorf("taxonomy %q not found", taxSlug)
+	}
+	for i := range tx.Nodes {
+		if tx.Nodes[i].Slug == slug {
+			tx.Nodes[i].Retired = true
+			m.Version++
+			return nil
+		}
+	}
+	return fmt.Errorf("node %q not found in taxonomy %q", slug, taxSlug)
+}
+
 func DefaultMetaConfig(projectKey string) MetaConfig {
 	return MetaConfig{
 		Version:    1,
