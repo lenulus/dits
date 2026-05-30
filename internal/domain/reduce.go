@@ -40,6 +40,7 @@ func Reduce(events []Event) (*WorkItem, error) {
 		Classifications: []Classification{},
 		RoleBindings:    []RoleBinding{},
 		Diagnostics:     []Diagnostic{},
+		Acks:            []Ack{},
 	}
 
 	for _, e := range events {
@@ -605,9 +606,100 @@ func ApplyEvent(wi *WorkItem, e Event) error {
 		}
 		wi.RoleBindings = removeRoleBinding(wi.RoleBindings, p.RoleSlug, p.Actor)
 		wi.UpdatedAt = maxTime(wi.UpdatedAt, e.Timestamp)
+
+	// --- ACK lifecycle ---
+
+	case EventWorkAckFiled:
+		var p AckFiledPayload
+		if err := json.Unmarshal(e.Payload, &p); err != nil {
+			return err
+		}
+		wi.Acks = append(wi.Acks, Ack{
+			AckID:              p.AckID,
+			ScopeSummary:       p.ScopeSummary,
+			DeliveryTiming:     p.DeliveryTiming,
+			TargetOutcome:      p.TargetOutcome,
+			AcceptanceCriteria: p.AcceptanceCriteria,
+			Specifier:          AckPending,
+			Builder:            AckPending,
+			Amendments:         []AckAmendment{},
+			FiledBy:            e.ActorID,
+			FiledAt:            e.Timestamp,
+		})
+		wi.UpdatedAt = maxTime(wi.UpdatedAt, e.Timestamp)
+
+	case EventWorkAckAccepted:
+		var p AckSidePayload
+		if err := json.Unmarshal(e.Payload, &p); err != nil {
+			return err
+		}
+		if a := currentAck(wi); a != nil {
+			setAckSide(a, p.Who, AckAccepted)
+		}
+		wi.UpdatedAt = maxTime(wi.UpdatedAt, e.Timestamp)
+
+	case EventWorkAckRejected:
+		var p AckSidePayload
+		if err := json.Unmarshal(e.Payload, &p); err != nil {
+			return err
+		}
+		if a := currentAck(wi); a != nil {
+			setAckSide(a, p.Who, AckRejected)
+		}
+		wi.UpdatedAt = maxTime(wi.UpdatedAt, e.Timestamp)
+
+	case EventWorkAckCleared:
+		var p AckClearedPayload
+		if err := json.Unmarshal(e.Payload, &p); err != nil {
+			return err
+		}
+		if a := currentAck(wi); a != nil {
+			if p.Who == AckSideBoth || p.Who == "" {
+				a.Specifier = AckPending
+				a.Builder = AckPending
+			} else {
+				setAckSide(a, p.Who, AckPending)
+			}
+		}
+		wi.UpdatedAt = maxTime(wi.UpdatedAt, e.Timestamp)
+
+	case EventWorkAckAmended:
+		var p AckAmendedPayload
+		if err := json.Unmarshal(e.Payload, &p); err != nil {
+			return err
+		}
+		if a := currentAck(wi); a != nil {
+			a.Amendments = append(a.Amendments, AckAmendment{
+				Type:      p.AmendmentType,
+				Fields:    p.Fields,
+				Reason:    p.Reason,
+				ActorID:   e.ActorID,
+				Timestamp: e.Timestamp,
+			})
+		}
+		wi.UpdatedAt = maxTime(wi.UpdatedAt, e.Timestamp)
 	}
 
 	return nil
+}
+
+// currentAck returns the most recently filed Ack, or nil if none exists.
+// accept/reject/clear/amend events apply to it.
+func currentAck(wi *WorkItem) *Ack {
+	if len(wi.Acks) == 0 {
+		return nil
+	}
+	return &wi.Acks[len(wi.Acks)-1]
+}
+
+// setAckSide sets the specifier or builder side of an ack to the given state.
+func setAckSide(a *Ack, who string, state AckState) {
+	switch who {
+	case AckSideSpecifier:
+		a.Specifier = state
+	case AckSideBuilder:
+		a.Builder = state
+	}
 }
 
 // --- Operational Lineage ---

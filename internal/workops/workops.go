@@ -500,6 +500,79 @@ func (w *WorkOps) UnbindRole(ctx context.Context, id domain.WorkItemID, roleSlug
 	return w.simpleEvent(ctx, id, domain.EventWorkRoleUnbound, domain.RoleBindingPayload{RoleSlug: roleSlug, Actor: actor}, true)
 }
 
+// ---------- ACK lifecycle ----------
+
+// AckFile files a commitment for bilateral acceptance, allocating an AckID.
+func (w *WorkOps) AckFile(ctx context.Context, id domain.WorkItemID, scopeSummary, deliveryTiming, targetOutcome, acceptanceCriteria string) (*domain.WorkItem, error) {
+	return w.simpleEvent(ctx, id, domain.EventWorkAckFiled, domain.AckFiledPayload{
+		AckID:              domain.NewAckID(),
+		ScopeSummary:       scopeSummary,
+		DeliveryTiming:     deliveryTiming,
+		TargetOutcome:      targetOutcome,
+		AcceptanceCriteria: acceptanceCriteria,
+	}, true)
+}
+
+// AckAccept records that one side (specifier|builder) stands behind the
+// current commitment.
+func (w *WorkOps) AckAccept(ctx context.Context, id domain.WorkItemID, who, note string) (*domain.WorkItem, error) {
+	return w.simpleEvent(ctx, id, domain.EventWorkAckAccepted, domain.AckSidePayload{Who: who, Note: note}, true)
+}
+
+// AckReject records that one side rejects the current commitment.
+func (w *WorkOps) AckReject(ctx context.Context, id domain.WorkItemID, who, note string) (*domain.WorkItem, error) {
+	return w.simpleEvent(ctx, id, domain.EventWorkAckRejected, domain.AckSidePayload{Who: who, Note: note}, true)
+}
+
+// AckAmend amends the current commitment. Per the ACK lifecycle: if the
+// amendment is material (scope/timeline/target change) and either side has
+// already accepted, an ack_cleared(both) is auto-emitted, resetting both sides
+// to pending. A target_change additionally emits review_requested (the
+// reviewer target is left to meta/methodology — Pilot routes it to Leadership).
+// A clarification never clears. All side effects are normal signed events.
+func (w *WorkOps) AckAmend(ctx context.Context, id domain.WorkItemID, amendmentType string, fields []string, reason string) (*domain.WorkItem, error) {
+	if !domain.IsValidAmendmentType(amendmentType) {
+		return nil, fmt.Errorf("invalid amendment type %q", amendmentType)
+	}
+	wi, err := w.simpleEvent(ctx, id, domain.EventWorkAckAmended, domain.AckAmendedPayload{
+		AmendmentType: amendmentType, Fields: fields, Reason: reason,
+	}, true)
+	if err != nil {
+		return nil, err
+	}
+
+	// Auto-clear both sides when a material amendment lands after acceptance.
+	if domain.IsMaterialAmendment(amendmentType) && ackHasAcceptance(wi) {
+		wi, err = w.simpleEvent(ctx, id, domain.EventWorkAckCleared, domain.AckClearedPayload{
+			Who: domain.AckSideBoth, Reason: "material_amendment",
+		}, true)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	// A target change additionally requests review.
+	if amendmentType == domain.AmendmentTargetChange {
+		wi, err = w.simpleEvent(ctx, id, domain.EventWorkReviewRequested, domain.ReviewRequestedPayload{
+			ReviewID: domain.NewReviewID(), Scope: "ack_target_change",
+		}, false)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return wi, nil
+}
+
+// ackHasAcceptance reports whether the most recently filed ACK has either side
+// in the accepted state.
+func ackHasAcceptance(wi *domain.WorkItem) bool {
+	if wi == nil || len(wi.Acks) == 0 {
+		return false
+	}
+	a := wi.Acks[len(wi.Acks)-1]
+	return a.Specifier == domain.AckAccepted || a.Builder == domain.AckAccepted
+}
+
 // AttachResult carries the resulting work item plus allocated artifact metadata.
 type AttachResult struct {
 	WorkItem   *domain.WorkItem

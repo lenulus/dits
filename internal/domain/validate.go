@@ -101,6 +101,33 @@ func ValidateEvent(e Event, meta *MetaConfig) error {
 		if !meta.HasRole(p.RoleSlug) {
 			return fmt.Errorf("unknown role %q", p.RoleSlug)
 		}
+
+	case EventWorkAckAccepted, EventWorkAckRejected:
+		var p AckSidePayload
+		if err := json.Unmarshal(e.Payload, &p); err != nil {
+			return err
+		}
+		if p.Who != AckSideSpecifier && p.Who != AckSideBuilder {
+			return fmt.Errorf("invalid ack side %q (want specifier|builder)", p.Who)
+		}
+
+	case EventWorkAckCleared:
+		var p AckClearedPayload
+		if err := json.Unmarshal(e.Payload, &p); err != nil {
+			return err
+		}
+		if p.Who != AckSideSpecifier && p.Who != AckSideBuilder && p.Who != AckSideBoth {
+			return fmt.Errorf("invalid ack side %q (want specifier|builder|both)", p.Who)
+		}
+
+	case EventWorkAckAmended:
+		var p AckAmendedPayload
+		if err := json.Unmarshal(e.Payload, &p); err != nil {
+			return err
+		}
+		if !IsValidAmendmentType(p.AmendmentType) {
+			return fmt.Errorf("invalid amendment type %q", p.AmendmentType)
+		}
 	}
 
 	return nil

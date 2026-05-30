@@ -124,6 +124,16 @@ const (
 	EventWorkRoleUnbound  EventType = "work.role_unbound"
 )
 
+// --- ACK lifecycle (generic two-party commitment) ---
+
+const (
+	EventWorkAckFiled    EventType = "work.ack_filed"
+	EventWorkAckAccepted EventType = "work.ack_accepted"
+	EventWorkAckRejected EventType = "work.ack_rejected"
+	EventWorkAckCleared  EventType = "work.ack_cleared"
+	EventWorkAckAmended  EventType = "work.ack_amended"
+)
+
 // Event is an immutable record of a state change in the system.
 type Event struct {
 	ID             EventID         `json:"id"`
@@ -418,6 +428,42 @@ type RoleBindingPayload struct {
 	RoleSlug string  `json:"role_slug"`
 	Actor    ActorID `json:"actor_id"`
 	Scope    string  `json:"scope,omitempty"`
+}
+
+// --- ACK Lifecycle Payloads ---
+
+// AckFiledPayload records a commitment the Specifier files for bilateral
+// acceptance. The commitment fields are free-form text the methodology
+// interprets.
+type AckFiledPayload struct {
+	AckID              string `json:"ack_id"`
+	ScopeSummary       string `json:"scope_summary"`
+	DeliveryTiming     string `json:"delivery_timing"`
+	TargetOutcome      string `json:"target_outcome"`
+	AcceptanceCriteria string `json:"acceptance_criteria"`
+}
+
+// AckSidePayload is shared by ack_accepted & ack_rejected: one side stands
+// behind (or rejects) the current commitment. Who is "specifier" | "builder".
+type AckSidePayload struct {
+	Who  string `json:"who"`
+	Note string `json:"note,omitempty"`
+}
+
+// AckClearedPayload resets one or both sides to pending. It is auto-emitted
+// when a material amendment lands after acceptance. Who is "specifier" |
+// "builder" | "both".
+type AckClearedPayload struct {
+	Who    string `json:"who"`
+	Reason string `json:"reason,omitempty"`
+}
+
+// AckAmendedPayload records a change to a filed commitment. AmendmentType is
+// one of scope_change | timeline_change | target_change | clarification.
+type AckAmendedPayload struct {
+	AmendmentType string   `json:"amendment_type"`
+	Fields        []string `json:"fields,omitempty"`
+	Reason        string   `json:"reason,omitempty"`
 }
 
 // MustMarshalPayload marshals a payload to JSON, panicking on error.

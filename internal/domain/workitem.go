@@ -72,8 +72,39 @@ type WorkItem struct {
 	// Reduce — the domain package must not import constraints.
 	Diagnostics []Diagnostic
 
+	// ACK commitments. Each ack_filed appends a new Ack; accept/reject/clear/
+	// amend apply to the most recently filed one.
+	Acks []Ack
+
 	EventCount int
 	HeadEvents []EventID
+}
+
+// Ack is a materialized two-party commitment: the filed scope/timing/outcome
+// plus each side's stance and the amendment history.
+type Ack struct {
+	AckID              string
+	ScopeSummary       string
+	DeliveryTiming     string
+	TargetOutcome      string
+	AcceptanceCriteria string
+	Specifier          AckState // pending | accepted | rejected
+	Builder            AckState
+	Amendments         []AckAmendment
+	FiledBy            ActorID
+	FiledAt            time.Time
+}
+
+// Rollup derives the alignment of this commitment's two sides.
+func (a Ack) Rollup() AckRollup { return ComputeAckRollup(a.Specifier, a.Builder) }
+
+// AckAmendment records one change to a filed commitment.
+type AckAmendment struct {
+	Type      string // scope_change | timeline_change | target_change | clarification
+	Fields    []string
+	Reason    string
+	ActorID   ActorID
+	Timestamp time.Time
 }
 
 // Classification places a work item within a node of a taxonomy.
