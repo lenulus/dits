@@ -1480,7 +1480,19 @@ td.is-summary .sht-cell { cursor: default; }
 .tx-node .act:hover { color: var(--accent); background: var(--accent-hi); }
 
 /* --- Pilot write-path controls (slide-over edit forms) --- */
-.so-section__label { font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-3); margin-bottom: 8px; }
+/* The base .so-section is a flex *header bar* (label + trailing rule). The
+   panel detail bodies instead use .so-section as a content *wrapper* — a
+   .so-section__label header followed by stacked rows (.so-field, .so-ackcard,
+   .so-roleform, .so-line). Detect that pattern and make the wrapper a block so
+   its children stack vertically instead of flowing sideways as flex items. */
+.so-section:has(> .so-section__label) { display: block; align-items: initial; }
+.so-section:has(> .so-section__label)::after { content: none; }
+.so-section__label {
+  display: flex; align-items: center; gap: 8px;
+  font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--ink-3); margin-bottom: 8px;
+}
+.so-section__label::after { content: ''; flex: 1; border-top: 1px solid var(--hairline); }
 .so-roleform { display: flex; gap: 8px; align-items: center; margin-bottom: 6px; }
 .so-roleform__label { width: 78px; font-family: var(--font-mono); font-size: 11px; color: var(--ink-2); flex: none; }
 .so-roleform .so-input { flex: 1; width: auto; }
