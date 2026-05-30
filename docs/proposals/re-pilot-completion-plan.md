@@ -89,13 +89,30 @@ The two clean options:
   build, but it breaks the "every change is a signed event on the DAG"
   invariant for this state and won't sync — **not recommended** beyond a cache.
 
-**Decision required (Track 0).** Recommended: **Option A**, using existing
-generic events where they fit (observation/finding/commented/linked) and adding
-at most one or two genuinely-generic projection events (`work.field_set` and/or
-`work.schedule_set`) to DITS core, plus the matching MCP tools, client methods,
-and reducer projection. This keeps DITS substrate-clean and every methodology
-field a signed, syncable event. Everything in §4 that needs this state is
-marked **[needs Track 0]**.
+**Decision (Track 0) — RESOLVED: Option A.** Use existing generic events where
+they fit and add at most one or two genuinely-generic projection events to DITS
+core, plus matching MCP tools, client methods, and reducer projection. This
+keeps DITS substrate-clean and every methodology field a signed, syncable
+event. Everything in §4 that needs this state is marked **[needs Track 0]**.
+Concrete mapping to implement in 0.2/0.3:
+
+| Methodology state | Representation (Option A) |
+|---|---|
+| Status narrative | `work.observation_recorded` payload `entry_type=status` (latest wins) |
+| RYG health | generic `work.field_set` `{field:"ryg", value:"g\|y\|r"}` (latest wins) |
+| Delivery target + precision | `work.field_set` `{field:"target", value}` + `{field:"target_precision", value:"Q\|M\|D"}` |
+| `customer_visible` | `work.field_set` `{field:"customer_visible", value:"true\|false"}` |
+| Stages (Dogfood/Beta/GA + dates + precision + state) | generic `work.schedule_set` `{stages:[{key,label,date,precision,state}]}` (replaces; latest wins) |
+| Risks (severity) | `work.finding_recorded` payload `entry_type=risk, severity=high\|medium\|low` (open until retracted) |
+| Next steps | `work.observation_recorded` payload `entry_type=next` |
+| RFC → milestone lineage | `work.linked` relation `derived_from` (no new event) |
+| Nested deliverables | `work.linked` relation `parent_of` (no new event) |
+
+`work.field_set` (scalar key/value projection) and `work.schedule_set` (a
+staged-timeline projection) are the only new core events, and both are
+methodology-agnostic — any consumer can use them. The reducer projects them
+onto `WorkItem` (e.g. `Fields map[string]string`, `Stages []Stage`), and Pilot
+derives RYG/target/risks/etc. from `Fields` + the typed observations/findings.
 
 Two known substrate gaps from the v2 build also live here (carried from
 `re-implementation-status.md`):
