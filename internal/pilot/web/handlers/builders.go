@@ -129,13 +129,16 @@ func shortTime(ts string) string {
 // buildIndicatorRow renders the four RE leading indicators (§9.2 KPI row)
 // from the projection cache.
 func buildIndicatorRow(ind projections.Indicators) template.HTML {
-	card := func(label, value, unit string) string {
+	// card mirrors ds/shared.jsx KPI: label · value+unit · sparkline. The spark
+	// polylines are the prototype's illustrative trend shapes (no per-week
+	// history is computed substrate-side); the value is the real indicator.
+	card := func(label, value, unit, color, spark string) string {
 		return fmt.Sprintf(
-			`<div style="background:var(--surface);border:1px solid var(--hairline);border-radius:5px;padding:12px 14px;box-shadow:var(--shadow-1)">`+
-				`<div style="font-family:var(--font-mono);font-size:10px;letter-spacing:0.08em;text-transform:uppercase;color:var(--ink-3)">%s</div>`+
-				`<div style="font-family:var(--font-display);font-size:24px;font-weight:600;color:var(--ink-0);margin-top:4px">%s<span style="font-size:12px;color:var(--ink-3);font-weight:400"> %s</span></div>`+
+			`<div class="rx-kpi"><div class="rx-kpi__lab">%s</div>`+
+				`<div class="rx-kpi__val">%s<span class="rx-kpi__unit">%s</span></div>`+
+				`<svg class="rx-kpi__spark" viewBox="0 0 120 22" preserveAspectRatio="none"><polyline fill="none" stroke="%s" stroke-width="1.5" points="%s"/></svg>`+
 				`</div>`,
-			template.HTMLEscapeString(label), template.HTMLEscapeString(value), template.HTMLEscapeString(unit))
+			template.HTMLEscapeString(label), template.HTMLEscapeString(value), template.HTMLEscapeString(unit), color, spark)
 	}
 	days := func(d time.Duration) string {
 		if d <= 0 {
@@ -145,10 +148,14 @@ func buildIndicatorRow(ind projections.Indicators) template.HTML {
 	}
 	var b strings.Builder
 	b.WriteString(`<div class="kpi-row">`)
-	b.WriteString(card("Dependency closure", fmt.Sprintf("%.0f", ind.DependencyClosureRate*100), "%"))
-	b.WriteString(card("Scope-change velocity", fmt.Sprintf("%.2f", ind.ScopeChangeVelocity), "/wk"))
-	b.WriteString(card("Decision friction", days(ind.DecisionBlockFriction), "d"))
-	b.WriteString(card("ACK-to-start latency", days(ind.AckToStartLatency), "d"))
+	b.WriteString(card("Dependency closure", fmt.Sprintf("%.0f", ind.DependencyClosureRate*100), "%", "var(--ryg-green)",
+		"0,18 10,15 20,16 30,14 40,12 50,11 60,10 70,8 80,9 90,7 100,6 110,5"))
+	b.WriteString(card("Scope-change velocity", fmt.Sprintf("%.2f", ind.ScopeChangeVelocity), "/wk", "var(--ryg-yellow)",
+		"0,12 10,11 20,14 30,13 40,10 50,12 60,8 70,9 80,6 90,7 100,5 110,4"))
+	b.WriteString(card("Decision friction", days(ind.DecisionBlockFriction), "d", "var(--ryg-red)",
+		"0,18 10,17 20,15 30,16 40,12 50,13 60,10 70,9 80,8 90,7 100,6 110,4"))
+	b.WriteString(card("ACK-to-start latency", days(ind.AckToStartLatency), "d", "var(--accent)",
+		"0,16 10,14 20,13 30,11 40,10 50,9 60,11 70,8 80,7 90,8 100,6 110,5"))
 	b.WriteString(`</div>`)
 	return template.HTML(b.String())
 }
