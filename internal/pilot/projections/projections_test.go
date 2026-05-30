@@ -213,6 +213,8 @@ func (f *fakeClient) WorkCreate(context.Context, string, string, string) (string
 	return "", nil
 }
 func (f *fakeClient) SetStatus(context.Context, string, string) error          { return nil }
+func (f *fakeClient) SetTitle(context.Context, string, string) error            { return nil }
+func (f *fakeClient) SetBody(context.Context, string, string) error             { return nil }
 func (f *fakeClient) Link(context.Context, string, string, string) error       { return nil }
 func (f *fakeClient) Unlink(context.Context, string, string, string) error     { return nil }
 func (f *fakeClient) FieldSet(context.Context, string, string, string) error   { return nil }

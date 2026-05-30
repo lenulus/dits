@@ -420,6 +420,8 @@ type Client interface {
 	// Lifecycle mutations (used by the scheduler and the mutation UI).
 	WorkCreate(ctx context.Context, kind, title, body string) (string, error)
 	SetStatus(ctx context.Context, id, status string) error
+	SetTitle(ctx context.Context, id, title string) error
+	SetBody(ctx context.Context, id, body string) error
 	Link(ctx context.Context, id, relType, target string) error
 	Unlink(ctx context.Context, id, relType, target string) error
 
@@ -668,6 +670,14 @@ func (c *client) SetStatus(ctx context.Context, id, status string) error {
 	return c.callVoid(ctx, "dits_work_status", map[string]any{"id": id, "status": status})
 }
 
+func (c *client) SetTitle(ctx context.Context, id, title string) error {
+	return c.callVoid(ctx, "dits_work_title_set", map[string]any{"id": id, "title": title})
+}
+
+func (c *client) SetBody(ctx context.Context, id, body string) error {
+	return c.callVoid(ctx, "dits_work_body_set", map[string]any{"id": id, "body": body})
+}
+
 func (c *client) Link(ctx context.Context, id, relType, target string) error {
 	return c.callVoid(ctx, "dits_work_link", map[string]any{"id": id, "type": relType, "target": target})
 }
@@ -832,6 +842,8 @@ func (stubClient) WorkCreate(context.Context, string, string, string) (string, e
 	return "", ErrNotImplemented
 }
 func (stubClient) SetStatus(context.Context, string, string) error { return ErrNotImplemented }
+func (stubClient) SetTitle(context.Context, string, string) error  { return ErrNotImplemented }
+func (stubClient) SetBody(context.Context, string, string) error   { return ErrNotImplemented }
 func (stubClient) Link(context.Context, string, string, string) error {
 	return ErrNotImplemented
 }

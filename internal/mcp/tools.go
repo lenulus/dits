@@ -869,6 +869,38 @@ func registerTools(s *server.MCPServer, cfg Config) {
 		return jsonResult(newWI)
 	}))
 
+	s.AddTool(mcp.NewTool("dits_work_title_set",
+		mcp.WithDescription("Set (rename) a work item's title."),
+		mcp.WithString("id", mcp.Required()),
+		mcp.WithString("title", mcp.Required()),
+	), withOps(cfg, func(ctx context.Context, w *workops.WorkOps, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		id, errR, _ := resolveID(ctx, w, req)
+		if errR != nil {
+			return errR, nil
+		}
+		wi, err := w.SetTitle(ctx, id, req.GetString("title", ""))
+		if err != nil {
+			return errResult(err)
+		}
+		return jsonResult(wi)
+	}))
+
+	s.AddTool(mcp.NewTool("dits_work_body_set",
+		mcp.WithDescription("Set a work item's body / summary text."),
+		mcp.WithString("id", mcp.Required()),
+		mcp.WithString("body"),
+	), withOps(cfg, func(ctx context.Context, w *workops.WorkOps, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		id, errR, _ := resolveID(ctx, w, req)
+		if errR != nil {
+			return errR, nil
+		}
+		wi, err := w.SetBody(ctx, id, req.GetString("body", ""))
+		if err != nil {
+			return errResult(err)
+		}
+		return jsonResult(wi)
+	}))
+
 	s.AddTool(mcp.NewTool("dits_work_assign",
 		mcp.WithDescription("Assign a work item to an actor."),
 		mcp.WithString("id", mcp.Required()),

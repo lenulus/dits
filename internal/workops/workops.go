@@ -565,6 +565,16 @@ func (w *WorkOps) SetStatus(ctx context.Context, id domain.WorkItemID, from, to 
 	return w.simpleEvent(ctx, id, domain.EventWorkStatusSet, domain.StatusSetPayload{From: from, To: to}, true)
 }
 
+// SetTitle renames a work item (work.title_set).
+func (w *WorkOps) SetTitle(ctx context.Context, id domain.WorkItemID, title string) (*domain.WorkItem, error) {
+	return w.simpleEvent(ctx, id, domain.EventWorkTitleSet, domain.TitleSetPayload{Title: title}, false)
+}
+
+// SetBody sets a work item's body/summary text (work.body_set).
+func (w *WorkOps) SetBody(ctx context.Context, id domain.WorkItemID, body string) (*domain.WorkItem, error) {
+	return w.simpleEvent(ctx, id, domain.EventWorkBodySet, domain.BodySetPayload{Body: body}, false)
+}
+
 func (w *WorkOps) AddLabel(ctx context.Context, id domain.WorkItemID, slug string) (*domain.WorkItem, error) {
 	return w.simpleEvent(ctx, id, domain.EventWorkLabelAdded, domain.LabelPayload{LabelSlug: slug}, true)
 }
