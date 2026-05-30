@@ -273,53 +273,73 @@ func stagesTab(item mcp.WorkItem) template.HTML {
 		len(stages), pluralS(len(stages)), esc(orDash(item.Target())))
 
 	if len(stages) == 0 {
-		b.WriteString(`<div style="padding:14px 0;font-family:var(--font-serif);font-style:italic;color:var(--ink-3);font-size:13.5px">No staging defined. Add Dogfood / Beta / GA stages with their own dates.</div>`)
+		b.WriteString(emptyLineSerif("No staging defined. Add Dogfood / Beta / GA stages with their own dates."))
 	}
 
-	// The editor: one form posting all stages (rows + the new row) to
-	// /m/{id}/stages, which marshals them into ScheduleSet.
-	b.WriteString(fmt.Sprintf(`<form method="post" action="/m/%s/stages" hx-post="/m/%s/stages" hx-target="[data-panel-body]" hx-swap="innerHTML" class="so-stack" style="padding:12px 0">`, esc(id), esc(id)))
-	stateOpts := func(cur string) string {
-		out := ""
-		for _, st := range []struct{ v, lab string }{{"done", "Completed"}, {"soon", "Next up"}, {"open", "Open"}} {
-			sel := ""
-			if st.v == cur || (cur == "" && st.v == "open") {
-				sel = " selected"
-			}
-			out += fmt.Sprintf(`<option value="%s"%s>%s</option>`, st.v, sel, st.lab)
+	// hiddenStages emits hidden inputs replaying a stage set, so add/remove can
+	// resubmit the full list to /m/{id}/stages (ScheduleSet replaces the list).
+	hiddenStages := func(sts []mcp.Stage) string {
+		var h strings.Builder
+		for _, s := range sts {
+			fmt.Fprintf(&h, `<input type="hidden" name="key" value="%s"><input type="hidden" name="label" value="%s"><input type="hidden" name="date" value="%s"><input type="hidden" name="precision" value="%s"><input type="hidden" name="state" value="%s">`,
+				esc(s.Key), esc(s.Label), esc(s.Date), esc(orVal(s.Precision, "Q")), esc(orVal(s.State, "open")))
 		}
-		return out
+		return h.String()
 	}
-	precOpts := func(cur string) string {
-		out := ""
-		for _, p := range []string{"Q", "M", "D"} {
-			sel := ""
-			if p == cur || (cur == "" && p == "Q") {
-				sel = " selected"
-			}
-			out += fmt.Sprintf(`<option value="%s"%s>%s</option>`, p, sel, p)
+	stateLabel := func(st string) string {
+		switch st {
+		case "done":
+			return "Completed"
+		case "soon":
+			return "Next up"
+		default:
+			return "Open"
 		}
-		return out
 	}
-	row := func(s mcp.Stage) {
-		fmt.Fprintf(&b, `<div class="stage-row stage-row--%s" style="display:flex;gap:8px;align-items:center">
-  <input name="key" class="so-input" style="width:90px" value="%s" placeholder="key">
-  <input name="label" class="so-input" style="flex:1" value="%s" placeholder="label (Dogfood / Beta / GA)">
-  <input name="date" class="so-input" style="width:110px" value="%s" placeholder="2026 Q3">
-  <select name="precision" class="so-select">%s</select>
-  <select name="state" class="so-select">%s</select>
+
+	// Stage cards (panels.jsx MilestoneStages): dot · label/state · date · prec.
+	b.WriteString(`<div style="display:flex;flex-direction:column;gap:10px;padding:12px 0">`)
+	for i, s := range stages {
+		state := orVal(s.State, "open")
+		others := append(append([]mcp.Stage{}, stages[:i]...), stages[i+1:]...)
+		fmt.Fprintf(&b, `<div class="stage-row stage-row--%s">
+  <span class="stage__dot" style="width:14px;height:14px"></span>
+  <span><div style="font-family:var(--font-display);font-size:15px;font-weight:500;color:var(--ink-0);letter-spacing:-0.005em">%s</div><div style="font-family:var(--font-mono);font-size:10.5px;color:var(--ink-3)">%s</div></span>
+  <span style="margin-left:auto;font-family:var(--font-mono);font-size:13px;color:var(--ink-1)">%s</span>
+  <span style="font-family:var(--font-mono);font-size:9px;padding:1px 5px;background:var(--paper-2);border-radius:3px;color:var(--ink-4);margin-left:8px">%s</span>
+  <form method="post" action="/m/%s/stages" hx-post="/m/%s/stages" hx-target="[data-panel-body]" hx-swap="innerHTML" style="margin:0 0 0 8px" title="remove stage">%s<button type="submit" style="background:none;border:none;color:var(--ink-4);cursor:pointer;font-size:14px;line-height:1">&times;</button></form>
 </div>`,
-			template.HTMLEscapeString(orVal(s.State, "open")),
-			esc(s.Key), esc(s.Label), esc(s.Date), precOpts(s.Precision), stateOpts(s.State))
+			esc(state), esc(s.Label), esc(stateLabel(state)), esc(orDash(s.Date)), esc(orVal(s.Precision, "Q")),
+			esc(id), esc(id), hiddenStages(others))
 	}
-	for _, s := range stages {
-		row(s)
+	b.WriteString(`</div>`)
+
+	// + add stage — a reveal-on-click inline form that appends to the timeline.
+	precOpts := ""
+	for _, p := range []string{"Q", "M", "D"} {
+		precOpts += fmt.Sprintf(`<option value="%s">%s</option>`, p, p)
 	}
-	// Blank add-row.
-	row(mcp.Stage{})
-	b.WriteString(`<div style="display:flex;gap:8px;align-items:center;margin-top:4px"><button class="rx-btn rx-btn--accent" type="submit">Save stages</button><span style="font-family:var(--font-mono);font-size:10px;color:var(--ink-4)">empty rows are dropped · replaces the full timeline</span></div>`)
-	b.WriteString(`</form>`)
+	stateOpts := ""
+	for _, st := range []struct{ v, lab string }{{"open", "Open"}, {"soon", "Next up"}, {"done", "Completed"}} {
+		stateOpts += fmt.Sprintf(`<option value="%s">%s</option>`, st.v, st.lab)
+	}
+	fmt.Fprintf(&b, `<details class="so-add-stage"><summary class="so-mini-add">+ add stage</summary>
+  <form method="post" action="/m/%s/stages" hx-post="/m/%s/stages" hx-target="[data-panel-body]" hx-swap="innerHTML" style="display:flex;gap:6px;align-items:center;padding:8px 0;flex-wrap:wrap">%s
+    <input name="label" class="so-input" style="flex:1;min-width:120px" placeholder="Label (Dogfood / Beta / GA)">
+    <input name="date" class="so-input" style="width:110px" placeholder="2026 Q3 / 2026-09-30">
+    <select name="precision" class="so-select">%s</select>
+    <select name="state" class="so-select">%s</select>
+    <input type="hidden" name="key" value="">
+    <button class="rx-btn rx-btn--accent rx-btn--sm" type="submit">Add</button>
+  </form>
+</details>`, esc(id), esc(id), hiddenStages(stages), precOpts, stateOpts)
 	return template.HTML(b.String())
+}
+
+// emptyLineSerif renders the prototype's italic serif empty-state paragraph.
+func emptyLineSerif(s string) string {
+	return `<div style="padding:14px 0;font-family:var(--font-serif);font-style:italic;color:var(--ink-3);font-size:13.5px">` +
+		template.HTMLEscapeString(s) + `</div>`
 }
 
 // --- C.4: Deps tab ---
@@ -332,9 +352,17 @@ func (s *Server) depsTab(ctx context.Context, item mcp.WorkItem) template.HTML {
 	id := rowID(item)
 	esc := template.HTMLEscapeString
 	all := s.milestones(ctx)
+	// Relations store the canonical work-item ID, but rows/links use the human
+	// shared ID — key the lookup by both so dep targets resolve to a title.
 	byID := map[string]mcp.WorkItem{}
 	for _, m := range all {
 		byID[rowID(m)] = m
+		if m.ID != "" {
+			byID[m.ID] = m
+		}
+		if m.SharedID != "" {
+			byID[m.SharedID] = m
+		}
 	}
 
 	var upstream []string
@@ -343,6 +371,9 @@ func (s *Server) depsTab(ctx context.Context, item mcp.WorkItem) template.HTML {
 		if rel.Type == "depends_on" {
 			upstream = append(upstream, rel.TargetWorkItem)
 			upSet[rel.TargetWorkItem] = true
+			if m, ok := byID[rel.TargetWorkItem]; ok {
+				upSet[rowID(m)] = true // also mark the shared id so the picker hides it
+			}
 		}
 	}
 	var downstream []mcp.WorkItem
@@ -389,13 +420,18 @@ func (s *Server) depsTab(ctx context.Context, item mcp.WorkItem) template.HTML {
 		b.WriteString(emptyLine("No upstream dependencies."))
 	}
 	for _, dep := range upstream {
-		m := byID[dep]
-		b.WriteString(depRow(dep, m.Title, m.Status, "up"))
+		m, ok := byID[dep]
+		shared := dep
+		if ok {
+			shared = rowID(m)
+		}
+		b.WriteString(depRow(shared, m.Title, m.Status, "up"))
 	}
 	b.WriteString(`</div>`)
 
-	// Add a dependency: a datalist-backed search over the candidate milestones.
-	b.WriteString(fmt.Sprintf(`<form method="post" action="/m/%s/dep/add" hx-post="/m/%s/dep/add" hx-target="[data-panel-body]" hx-swap="innerHTML" class="dep-add">
+	// Add a dependency: a reveal-on-click datalist search over the candidates.
+	b.WriteString(fmt.Sprintf(`<details class="dep-add-wrap"><summary class="so-mini-add">+ link dependency</summary>
+  <form method="post" action="/m/%s/dep/add" hx-post="/m/%s/dep/add" hx-target="[data-panel-body]" hx-swap="innerHTML" class="dep-add">
   <input name="target" class="so-input" list="dep-cands-%s" placeholder="Search milestones to link…" autocomplete="off">
   <button class="rx-btn rx-btn--ghost" type="submit">+ link</button>
   <datalist id="dep-cands-%s">`, esc(id), esc(id), esc(id), esc(id)))
@@ -406,7 +442,7 @@ func (s *Server) depsTab(ctx context.Context, item mcp.WorkItem) template.HTML {
 		}
 		fmt.Fprintf(&b, `<option value="%s">%s</option>`, esc(mid), esc(m.Title))
 	}
-	b.WriteString(`</datalist></form>`)
+	b.WriteString(`</datalist></form></details>`)
 
 	// Downstream.
 	b.WriteString(sectionHead("Downstream (blocks)", len(downstream), ""))
