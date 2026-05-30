@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>DITS · RE — Ergonomic Prototype</title>
+<link rel="stylesheet" href="ds/colors_and_type.css"/>
+<link rel="stylesheet" href="ds/shared.css"/>
+<link rel="stylesheet" href="app/app.css"/>
+</head>
+<body class="rx-base" data-screen-label="DITS RE \u2014 spreadsheet prototype">
+<template id="__bundler_thumbnail" data-bg-color="#F4EFE6">
+  <svg viewBox="0 0 1200 800" xmlns="http://www.w3.org/2000/svg">
+    <rect width="1200" height="800" fill="#F4EFE6"/>
+    <!-- header band -->
+    <rect x="240" y="180" width="720" height="60" fill="#FFFFFF" stroke="#D6CFC1" stroke-width="2"/>
+    <rect x="262" y="200" width="180" height="22" fill="#1F4FB8"/>
+    <!-- sheet rows -->
+    <g fill="#FFFFFF" stroke="#D6CFC1" stroke-width="2">
+      <rect x="240" y="252" width="720" height="46"/>
+      <rect x="240" y="304" width="720" height="46"/>
+      <rect x="240" y="356" width="720" height="46"/>
+      <rect x="240" y="408" width="720" height="46"/>
+      <rect x="240" y="460" width="720" height="46"/>
+    </g>
+    <!-- accent column chips -->
+    <g>
+      <rect x="262" y="266" width="90" height="18" rx="9" fill="#E2EAF8"/>
+      <rect x="262" y="318" width="90" height="18" rx="9" fill="#FFF1D6"/>
+      <rect x="262" y="370" width="90" height="18" rx="9" fill="#FDE0DC"/>
+      <rect x="262" y="422" width="90" height="18" rx="9" fill="#E2EAF8"/>
+      <rect x="262" y="474" width="90" height="18" rx="9" fill="#DDF0E0"/>
+    </g>
+    <!-- mono dots -->
+    <g fill="#3F424D">
+      <circle cx="400" cy="275" r="4"/>
+      <circle cx="400" cy="327" r="4"/>
+      <circle cx="400" cy="379" r="4"/>
+      <circle cx="400" cy="431" r="4"/>
+      <circle cx="400" cy="483" r="4"/>
+    </g>
+    <!-- label -->
+    <text x="600" y="600" font-family="serif" font-size="32" fill="#15130E" text-anchor="middle" font-style="italic">DITS \u00b7 RE</text>
+    <text x="600" y="640" font-family="monospace" font-size="14" fill="#888B94" text-anchor="middle" letter-spacing="0.2em">SPREADSHEET PROTOTYPE</text>
+  </svg>
+</template>
+<div id="root"></div>
+
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+
+<script type="text/babel" src="ds/shared.jsx"></script>
+<script type="text/babel" src="app/data.jsx"></script>
+<script type="text/babel" src="app/sheet.jsx"></script>
+<script type="text/babel" src="app/views.jsx"></script>
+<script type="text/babel" src="app/panels.jsx"></script>
+<script type="text/babel" src="app/App.jsx"></script>
+</body>
+</html>

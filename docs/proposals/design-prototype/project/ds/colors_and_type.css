@@ -1,0 +1,239 @@
+/* =============================================================
+   DITS — Foundations
+   White surfaces on warm-cool paper. Bold semantic accents.
+   Built for dense, ergonomic data work — no modals.
+   ============================================================= */
+
+/* ---- Fonts (Google Fonts substitutions — see README Fonts note) ---- */
+@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700;9..144,800&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;1,6..72,400&display=swap');
+
+:root {
+  /* ---------- Surfaces & paper ---------- */
+  /* Surfaces are WHITE — cards, tables, panels, popovers.
+     Paper is the warm-cool *background* the surfaces float on.
+     Two-tone contrast is intentional. */
+  --surface:    #FFFFFF;   /* primary card / panel / table surface */
+  --surface-2:  #FCFCFA;   /* alt row / subtle warm white */
+  --surface-3:  #F8F7F3;   /* hover, focused row */
+
+  --paper-0:    #F2F1ED;   /* app bg — near-neutral off-white, faint warm cast */
+  --paper-1:    #EAE9E4;   /* sidebar, nav rail */
+  --paper-2:    #DEDDD7;   /* inset, table head bg, retired */
+  --paper-3:    #C7C6BF;   /* heavy divider */
+  --paper-4:    #AAA9A2;   /* strongest non-text */
+
+  --ink-0:    #14161B;  /* headlines, strongest text */
+  --ink-1:    #232631;  /* body */
+  --ink-2:    #3F424D;  /* secondary */
+  --ink-3:    #5C606A;  /* tertiary, captions */
+  --ink-4:    #888B94;  /* muted label */
+  --ink-5:    #B2B5BC;  /* placeholder */
+
+  --hairline:        #E2E1DB;   /* 1px rules on white */
+  --hairline-strong: #C6C5BD;   /* emphatic dividers, input borders */
+  --hairline-paper:  #D3D2CB;   /* rules on paper bg */
+
+  /* ---------- RYG — the load-bearing semantic colors ---------- */
+  /* Bolder, more confident. Amber-bronze, moss-green, brick-red. */
+  --ryg-green:        #2F7A3D;   /* moss — confident, not pastel */
+  --ryg-green-ink:    #1B4523;
+  --ryg-green-paper:  #DCEAD9;
+  --ryg-green-rule:   #76A57F;
+  --ryg-green-hi:     #ECF4EA;   /* row highlight, very subtle */
+
+  --ryg-yellow:       #C56A1A;   /* amber-bronze — confident, no goldenrod */
+  --ryg-yellow-ink:   #6E3A0C;
+  --ryg-yellow-paper: #F4DDB7;
+  --ryg-yellow-rule:  #D89A4F;
+  --ryg-yellow-hi:    #FBEED5;
+
+  --ryg-red:          #B8302E;   /* brick — saturated but not candy */
+  --ryg-red-ink:      #6A1C1C;
+  --ryg-red-paper:    #F0CFCB;
+  --ryg-red-rule:     #D26563;
+  --ryg-red-hi:       #FAE0DD;
+
+  /* ---------- Accent (primary action, selection, focus) ---------- */
+  /* Cobalt-ink — confident, NOT Material. Used sparingly. */
+  --accent:           #1F4FB8;
+  --accent-hover:     #163D94;
+  --accent-ink:       #0F2A6E;
+  --accent-paper:     #DCE4F5;
+  --accent-hi:        #EEF1FA;   /* selected-row tint on white */
+  --accent-rule:      #7D99D4;
+
+  /* ---------- Voice accents (used for role identity, not action) ---------- */
+  --ink-blue:        #1E3F60;   /* Pilot/navigation voice */
+  --ink-blue-paper:  #DCE3EC;
+  --ink-plum:        #5C1E50;   /* Leadership/adjudication */
+  --ink-plum-paper:  #ECDCE7;
+
+  /* ---------- Freshness tiers ---------- */
+  --fresh:   var(--ryg-green);
+  --aging:   var(--ryg-yellow);
+  --stale:   var(--ryg-red);
+
+  /* ---------- ACK integrity ---------- */
+  --integrity-intact:   var(--ryg-green);
+  --integrity-drifting: var(--ryg-yellow);
+  --integrity-invalid:  var(--ryg-red);
+
+  /* ---------- Type families ---------- */
+  --font-display: 'Fraunces', 'Times New Roman', Georgia, serif;      /* editorial serif — headlines, slide titles */
+  --font-serif:   'Newsreader', 'Georgia', serif;                      /* long-form body, quotes, narrative Log entries */
+  --font-sans:    'Inter', -apple-system, 'Helvetica Neue', sans-serif;/* UI body, dense tables, labels */
+  --font-mono:    'JetBrains Mono', 'SFMono-Regular', Consolas, monospace; /* data, IDs, timestamps, indicator values */
+
+  /* ---------- Type scale (dense, editorial) ---------- */
+  --t-xxs: 10px;   /* table micro, chrome labels */
+  --t-xs:  11px;   /* chip, badge, timestamp */
+  --t-sm:  12px;   /* dense table body, secondary ui */
+  --t-md:  13px;   /* default ui body */
+  --t-lg:  15px;   /* emphasized body, card title */
+  --t-xl:  18px;   /* section header */
+  --t-2xl: 22px;   /* page header */
+  --t-3xl: 30px;   /* display heading */
+  --t-4xl: 44px;   /* slide title */
+  --t-5xl: 68px;   /* slide hero */
+
+  --lh-tight: 1.15;
+  --lh-snug:  1.3;
+  --lh-body:  1.5;
+  --lh-loose: 1.65;
+
+  /* ---------- Spacing (4px base, tight) ---------- */
+  --s-0:  2px;
+  --s-1:  4px;
+  --s-2:  6px;
+  --s-3:  8px;
+  --s-4:  12px;
+  --s-5:  16px;
+  --s-6:  20px;
+  --s-7:  24px;
+  --s-8:  32px;
+  --s-9:  48px;
+  --s-10: 64px;
+
+  /* ---------- Radii (small, editorial) ---------- */
+  --r-0: 0px;      /* hairlines and rules */
+  --r-1: 2px;      /* chips, inputs */
+  --r-2: 3px;      /* cards */
+  --r-3: 6px;      /* buttons, modal */
+  --r-pill: 999px; /* status pill */
+
+  /* ---------- Shadows (restrained, surface-on-paper) ---------- */
+  --shadow-0: none;
+  --shadow-1: 0 1px 0 rgba(20,22,27,0.04), 0 0 0 1px rgba(20,22,27,0.04);   /* baseline card on paper */
+  --shadow-2: 0 1px 3px rgba(20,22,27,0.06), 0 0 0 1px rgba(20,22,27,0.05); /* elevated card */
+  --shadow-3: 0 8px 24px rgba(20,22,27,0.10), 0 1px 2px rgba(20,22,27,0.06);/* slide-over, popover */
+  --shadow-focus: 0 0 0 3px rgba(31,79,184,0.18);                            /* accent focus ring */
+  --shadow-inset: inset 0 1px 0 rgba(255,255,255,0.6), inset 0 -1px 0 rgba(20,22,27,0.04);
+
+  /* ---------- Transitions ---------- */
+  --ease: cubic-bezier(0.22, 0.61, 0.36, 1);
+  --dur-fast: 120ms;
+  --dur-med:  200ms;
+}
+
+/* ---------- Semantic text styles ---------- */
+.h-display {
+  font-family: var(--font-display);
+  font-weight: 500;
+  font-size: var(--t-4xl);
+  line-height: var(--lh-tight);
+  letter-spacing: -0.02em;
+  color: var(--ink-0);
+  font-optical-sizing: auto;
+}
+.h1 {
+  font-family: var(--font-display);
+  font-weight: 500;
+  font-size: var(--t-3xl);
+  line-height: var(--lh-tight);
+  letter-spacing: -0.015em;
+  color: var(--ink-0);
+}
+.h2 {
+  font-family: var(--font-display);
+  font-weight: 500;
+  font-size: var(--t-2xl);
+  line-height: var(--lh-snug);
+  letter-spacing: -0.01em;
+  color: var(--ink-0);
+}
+.h3 {
+  font-family: var(--font-sans);
+  font-weight: 600;
+  font-size: var(--t-lg);
+  line-height: var(--lh-snug);
+  letter-spacing: -0.005em;
+  color: var(--ink-0);
+}
+.eyebrow {
+  font-family: var(--font-sans);
+  font-weight: 600;
+  font-size: var(--t-xxs);
+  line-height: 1;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+.body {
+  font-family: var(--font-sans);
+  font-size: var(--t-md);
+  line-height: var(--lh-body);
+  color: var(--ink-1);
+}
+.body-serif {
+  font-family: var(--font-serif);
+  font-size: var(--t-lg);
+  line-height: var(--lh-loose);
+  color: var(--ink-1);
+}
+.caption {
+  font-family: var(--font-sans);
+  font-size: var(--t-xs);
+  color: var(--ink-3);
+  line-height: var(--lh-snug);
+}
+.mono {
+  font-family: var(--font-mono);
+  font-size: var(--t-sm);
+  font-feature-settings: "tnum" 1, "ss01" 1;
+  letter-spacing: -0.01em;
+}
+.mono-xs { font-family: var(--font-mono); font-size: var(--t-xxs); letter-spacing: 0; }
+
+/* ---------- Base element defaults (scoped inside UI kits) ---------- */
+.rx-base {
+  background: var(--paper-0);
+  color: var(--ink-1);
+  font-family: var(--font-sans);
+  font-size: var(--t-md);
+  line-height: var(--lh-body);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+.rx-base h1 { font-family: var(--font-display); font-weight: 500; font-size: var(--t-3xl); letter-spacing: -0.015em; line-height: var(--lh-tight); color: var(--ink-0); margin: 0; }
+.rx-base h2 { font-family: var(--font-display); font-weight: 500; font-size: var(--t-2xl); letter-spacing: -0.01em;  line-height: var(--lh-snug); color: var(--ink-0); margin: 0; }
+.rx-base h3 { font-family: var(--font-sans); font-weight: 600; font-size: var(--t-lg); letter-spacing: -0.005em; color: var(--ink-0); margin: 0; }
+.rx-base p  { margin: 0; }
+.rx-base a  { color: var(--accent); text-decoration: none; border-bottom: 1px solid var(--accent-rule); }
+.rx-base a:hover { color: var(--accent-hover); border-bottom-color: var(--accent); }
+.rx-base hr { border: 0; border-top: 1px solid var(--hairline); margin: var(--s-5) 0; }
+.rx-base code, .rx-base kbd { font-family: var(--font-mono); font-size: 0.92em; background: var(--paper-2); padding: 1px 5px; border-radius: var(--r-1); }
+
+/* ---------- Utility primitives for cards / UI kits ---------- */
+.rule       { border-top: 1px solid var(--hairline); }
+.rule-heavy { border-top: 2px solid var(--ink-0); }
+.rule-v     { border-left: 1px solid var(--hairline); }
+
+/* Status dot — the classic ink stamp */
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; }
+.dot-green  { background: var(--ryg-green); }
+.dot-yellow { background: var(--ryg-yellow); }
+.dot-red    { background: var(--ryg-red); }
+.dot-stale  { background: transparent; border: 1px dashed var(--ink-4); }
+
+/* Focus */
+.rx-base :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
