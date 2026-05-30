@@ -18,8 +18,8 @@ the inline-mutation UI are the main remaining build.
 | 2 — ACK lifecycle (core) | §6 | ✅ Done | 5 events, `ack.go` (AckState/AckRollup/ComputeAckRollup), reducer materialization, workops auto-clear orchestration. |
 | 3 — MCP surface buildout | §7 | ✅ Done | 18 tools (classification, roles, ACK, diagnostics, meta admin, identity, events, filtered work_list). Also fixed a sqlite persistence gap the new read tools exposed. |
 | 4 — Pilot scaffold | §8 | ◑ Partial | Binary + package tree + forbidden-imports lint ✅. Typed MCP client over stdio ✅. **OAuth/sessions/custodial signing: still stubs** (see follow-ups). |
-| 5 — Pilot UI | §9 | ◑ Partial | Foundation (CSS lift, layout, Sheet primitive, slide-over panel, ⌘K) ✅. All 12 views wired to **live MCP data** ✅. **Inline cell mutation + full panel-tab bodies + filter-chip UI: placeholder** (read path complete; write path pending). |
-| 6 — Scheduler / projections / meta | §10 | ◑ In progress | RE meta bundle + `pilot init` ✅ (verified end-to-end). Scheduler + indicator projections in flight. |
+| 5 — Pilot UI | §9 | ◑ Partial | Foundation (CSS lift, layout, Sheet primitive, slide-over panel, ⌘K) ✅. All 12 views wired to **live MCP data** ✅; Leadership shows the live four-indicator KPI row. **Inline cell mutation + full panel-tab bodies + filter-chip UI: placeholder** (read path complete; write path pending). |
+| 6 — Scheduler / projections / meta | §10 | ✅ Done | RE meta bundle + `pilot init` ✅. Indicator projections (4 indicators + cache) ✅, rendered on Leadership. Scheduler ✅ (`pilot serve --schedule`) — verified auto-creating an outcome_assessment for a shipped milestone over MCP. |
 
 ## Verified end-to-end
 
@@ -32,6 +32,12 @@ correctly excluded), `/events` (live signed events), `/` → `/for-you`.
 The full path is **browser → Pilot → stdio MCP → dits-mcp → DITS substrate
 → reduced state → DTO → server-rendered HTML**, with Pilot importing no
 DITS-internal package (enforced by `TestForbiddenImports`).
+
+With `pilot serve --schedule`, the RE scheduler runs in-process and, on the
+seeded project, auto-created `REDEMO-5` (`Outcome: Mobile API parity`) for
+the shipped milestone `REDEMO-4` — `WorkList(shipped) → WorkCreate →
+Link`, all over MCP. The Leadership view renders the four leading
+indicators computed Pilot-side from the event log.
 
 ## Follow-ups / known gaps
 
