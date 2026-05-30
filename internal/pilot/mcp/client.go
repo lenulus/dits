@@ -244,6 +244,11 @@ type Client interface {
 	AckReject(ctx context.Context, id, who, note string) error
 	AckAmend(ctx context.Context, id, amendmentType string, fields []string, reason string) error
 
+	// Lifecycle mutations (used by the scheduler and the mutation UI).
+	WorkCreate(ctx context.Context, kind, title, body string) (string, error)
+	SetStatus(ctx context.Context, id, status string) error
+	Link(ctx context.Context, id, relType, target string) error
+
 	// Meta administration. MetaApply's signature is depended on by Pilot's
 	// first-run init flow and must not change.
 	MetaApply(ctx context.Context, json []byte) error
@@ -454,6 +459,32 @@ func (c *client) AckAmend(ctx context.Context, id, amendmentType string, fields 
 	return c.callVoid(ctx, "dits_ack_amend", args)
 }
 
+func (c *client) WorkCreate(ctx context.Context, kind, title, body string) (string, error) {
+	var out struct {
+		SharedID string   `json:"shared_id"`
+		WorkItem WorkItem `json:"work_item"`
+	}
+	args := map[string]any{"kind": kind, "title": title}
+	if body != "" {
+		args["body"] = body
+	}
+	if err := c.call(ctx, "dits_work_create", args, &out); err != nil {
+		return "", err
+	}
+	if out.SharedID != "" {
+		return out.SharedID, nil
+	}
+	return out.WorkItem.ID, nil
+}
+
+func (c *client) SetStatus(ctx context.Context, id, status string) error {
+	return c.callVoid(ctx, "dits_work_status", map[string]any{"id": id, "status": status})
+}
+
+func (c *client) Link(ctx context.Context, id, relType, target string) error {
+	return c.callVoid(ctx, "dits_work_link", map[string]any{"id": id, "type": relType, "target": target})
+}
+
 func (c *client) MetaApply(ctx context.Context, metaJSON []byte) error {
 	return c.callVoid(ctx, "dits_meta_apply", map[string]any{"meta_json": string(metaJSON)})
 }
@@ -541,6 +572,13 @@ func (stubClient) AckFile(context.Context, string, string, string, string, strin
 func (stubClient) AckAccept(context.Context, string, string, string) error { return ErrNotImplemented }
 func (stubClient) AckReject(context.Context, string, string, string) error { return ErrNotImplemented }
 func (stubClient) AckAmend(context.Context, string, string, []string, string) error {
+	return ErrNotImplemented
+}
+func (stubClient) WorkCreate(context.Context, string, string, string) (string, error) {
+	return "", ErrNotImplemented
+}
+func (stubClient) SetStatus(context.Context, string, string) error { return ErrNotImplemented }
+func (stubClient) Link(context.Context, string, string, string) error {
 	return ErrNotImplemented
 }
 func (stubClient) MetaApply(context.Context, []byte) error { return ErrNotImplemented }
