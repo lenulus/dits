@@ -64,6 +64,9 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/for-you", http.StatusFound)
 	})
+
+	// Phase-5 write path: POST endpoints that perform one MCP mutation each.
+	s.registerMutations(mux)
 }
 
 // renderLayout renders the standard app shell for a view key.
@@ -130,13 +133,13 @@ func (s *Server) Portfolio(w http.ResponseWriter, r *http.Request) {
 		p.Sheet = buildPortfolioSheet(items, q.Get("preset"), q.Get("group"), q.Get("open"))
 		p.Counters = fmt.Sprintf("%d milestones", len(items))
 		if open := q.Get("open"); open != "" {
-			title := open
-			for _, m := range items {
-				if rowID(m) == open {
-					title = m.Title
-				}
+			panel := web.NewMilestonePanel(open, open, q.Get("tab"))
+			// Fetch the opened record so the panel hosts live, editable controls.
+			if item, err := s.Client.WorkGet(r.Context(), open); err == nil {
+				panel.Title = item.Title
+				panel.Body = buildMilestonePanelBody(item, panel.ActiveTab)
 			}
-			p.Panel = web.NewMilestonePanel(open, title, q.Get("tab"))
+			p.Panel = panel
 		}
 	})
 }

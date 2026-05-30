@@ -1459,3 +1459,18 @@ td.is-summary .sht-cell { cursor: default; }
 .tx-node:hover .actions { opacity: 1; }
 .tx-node .act { color: var(--ink-3); cursor: pointer; padding: 2px 6px; border-radius: 3px; }
 .tx-node .act:hover { color: var(--accent); background: var(--accent-hi); }
+
+/* --- Pilot write-path controls (slide-over edit forms) --- */
+.so-section__label { font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-3); margin-bottom: 8px; }
+.so-roleform { display: flex; gap: 8px; align-items: center; margin-bottom: 6px; }
+.so-roleform__label { width: 78px; font-family: var(--font-mono); font-size: 11px; color: var(--ink-2); flex: none; }
+.so-roleform .so-input { flex: 1; width: auto; }
+.so-stack { display: flex; flex-direction: column; gap: 8px; }
+.so-field { display: flex; gap: 8px; padding: 4px 0; font-size: 12.5px; color: var(--ink-1); border-bottom: 1px solid var(--hairline); }
+.so-field__k { width: 92px; flex: none; font-family: var(--font-mono); font-size: 10.5px; color: var(--ink-3); }
+.so-ackcard { display: flex; align-items: center; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid var(--hairline); }
+.so-ackcard__head { font-size: 13px; color: var(--ink-1); display: flex; align-items: center; gap: 8px; }
+.so-ackbtns { display: flex; gap: 6px; }
+.so-ackbtns form { margin: 0; }
+.so-amend { display: flex; gap: 8px; align-items: center; margin-top: 10px; }
+.so-amend .so-input { flex: 1; width: auto; }
