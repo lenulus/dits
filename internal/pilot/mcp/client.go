@@ -284,9 +284,12 @@ func NewClient(ctx context.Context, cfg Config) (Client, error) {
 	if command == "" {
 		command = "dits-mcp"
 	}
-	args := []string{"serve"}
+	// dits-mcp is a flag-only binary (no subcommand): `dits-mcp -project <dir>`.
+	// A positional "serve" would make flag.Parse stop before -project, so the
+	// project would never be set — pass the flag directly.
+	var args []string
 	if cfg.ProjectRoot != "" {
-		args = append(args, "--project", cfg.ProjectRoot)
+		args = append(args, "-project", cfg.ProjectRoot)
 	}
 	args = append(args, cfg.Args...)
 

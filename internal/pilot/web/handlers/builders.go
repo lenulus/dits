@@ -1,0 +1,368 @@
+// Live view-model builders: map MCP DTOs (mcp.WorkItem / mcp.Event / mcp.Meta)
+// into the generic web view models the templates render. These are the seam
+// the Phase-5 foundation left open — each builder replaces the deleted demo
+// dataset with real substrate data fetched over MCP.
+package handlers
+
+import (
+	"fmt"
+	"html/template"
+	"sort"
+	"strings"
+
+	"github.com/lenulus/pf/internal/pilot/mcp"
+	"github.com/lenulus/pf/internal/pilot/web"
+)
+
+// portfolioColumns is the canonical Portfolio column set + groups (§9.3),
+// shared by the Portfolio and (a subset) the ACK view.
+func portfolioColumns() []web.Column {
+	return []web.Column{
+		{Key: "id", Label: "ID", Width: 96, Group: "identity", Frozen: true, Readonly: true},
+		{Key: "title", Label: "Title", Width: 260, Group: "identity", Frozen: true},
+		{Key: "product", Label: "Product", Width: 150, Group: "classification"},
+		{Key: "org", Label: "Org", Width: 150, Group: "classification"},
+		{Key: "status", Label: "Status", Width: 140, Group: "health"},
+		{Key: "specAck", Label: "S-ACK", Width: 104, Group: "acks"},
+		{Key: "buildAck", Label: "B-ACK", Width: 104, Group: "acks"},
+		{Key: "specifier", Label: "Specifier", Width: 140, Group: "roles"},
+		{Key: "builder", Label: "Builder", Width: 140, Group: "roles"},
+		{Key: "pilot", Label: "Pilot", Width: 140, Group: "roles"},
+		{Key: "align", Label: "Alignment", Width: 140, Group: "delivery"},
+		{Key: "diag", Label: "Diag", Width: 64, Group: "signals", Num: true},
+	}
+}
+
+// buildPortfolioSheet maps milestones into the Portfolio sheet.
+func buildPortfolioSheet(items []mcp.WorkItem, preset, group, activeID string) *web.SheetModel {
+	if preset == "" {
+		preset = "overview"
+	}
+	collapsed := web.CollapsedFromPreset(preset)
+	if group != "" {
+		collapsed[group] = !collapsed[group]
+	}
+
+	rows := make([]web.Row, 0, len(items))
+	for _, m := range items {
+		spec := roleActor(m, "specifier")
+		build := roleActor(m, "builder")
+		pilot := roleActor(m, "pilot")
+		specAck, buildAck, rollup := "pending", "pending", "both_pending"
+		if a, ok := latestAck(m); ok {
+			specAck, buildAck = a.Specifier, a.Builder
+			rollup = mcp.AckRollup(a.Specifier, a.Builder)
+		}
+		rows = append(rows, web.Row{
+			ID: rowID(m),
+			Cells: map[string]web.Cell{
+				"id":        {HTML: idCell(rowID(m))},
+				"title":     {Raw: m.Title},
+				"product":   {HTML: classCell(m, "product")},
+				"org":       {HTML: classCell(m, "org")},
+				"status":    {HTML: statusPill(m.Status)},
+				"specAck":   {HTML: ackStatePill(specAck)},
+				"buildAck":  {HTML: ackStatePill(buildAck)},
+				"specifier": {HTML: actorCell(spec)},
+				"builder":   {HTML: actorCell(build)},
+				"pilot":     {HTML: actorCell(pilot)},
+				"align":     {HTML: rollupPill(rollup)},
+				"diag":      {HTML: diagBadge(m)},
+			},
+		})
+	}
+
+	s := &web.SheetModel{
+		Columns:      portfolioColumns(),
+		Rows:         rows,
+		Groups:       web.PortfolioGroups,
+		Presets:      web.PortfolioPresets,
+		Collapsed:    collapsed,
+		Selectable:   true,
+		AddLabel:     "New milestone…",
+		ActiveID:     activeID,
+		NavColumnIdx: 1,
+	}
+	s.ComputeLayout()
+	return s
+}
+
+// buildSimpleSheet builds a flat (no column-group) sheet from items, given a
+// column set and a per-row cell builder. Used by RFC/Decisions/Outcomes/Roles.
+func buildSimpleSheet(cols []web.Column, rows []web.Row, addLabel string) *web.SheetModel {
+	s := &web.SheetModel{
+		Columns:      cols,
+		Rows:         rows,
+		Selectable:   true,
+		AddLabel:     addLabel,
+		NavColumnIdx: 1,
+	}
+	s.ComputeLayout()
+	return s
+}
+
+func buildRfcSheet(items []mcp.WorkItem) *web.SheetModel {
+	cols := []web.Column{
+		{Key: "id", Label: "ID", Width: 96, Frozen: true, Readonly: true},
+		{Key: "title", Label: "Title", Width: 280, Frozen: true},
+		{Key: "status", Label: "Status", Width: 160},
+		{Key: "specifier", Label: "Specifier", Width: 160},
+		{Key: "body", Label: "Summary", Width: 480},
+	}
+	rows := make([]web.Row, 0, len(items))
+	for _, r := range items {
+		rows = append(rows, web.Row{ID: rowID(r), Cells: map[string]web.Cell{
+			"id":        {HTML: idCell(rowID(r))},
+			"title":     {Raw: r.Title},
+			"status":    {HTML: statusPill(r.Status)},
+			"specifier": {HTML: actorCell(roleActor(r, "specifier"))},
+			"body":      {Raw: truncate(r.Body, 140)},
+		}})
+	}
+	return buildSimpleSheet(cols, rows, "New RFC…")
+}
+
+// buildAckSheet is the bulk-ack workspace: S-ACK / B-ACK / alignment per
+// milestone (§9.2, AckView).
+func buildAckSheet(items []mcp.WorkItem) *web.SheetModel {
+	cols := []web.Column{
+		{Key: "id", Label: "ID", Width: 96, Frozen: true, Readonly: true},
+		{Key: "title", Label: "Milestone", Width: 280, Frozen: true},
+		{Key: "specifier", Label: "Specifier", Width: 150},
+		{Key: "specAck", Label: "Specifier ACK", Width: 150},
+		{Key: "builder", Label: "Builder", Width: 150},
+		{Key: "buildAck", Label: "Builder ACK", Width: 150},
+		{Key: "align", Label: "Alignment", Width: 150, Readonly: true},
+	}
+	rows := make([]web.Row, 0, len(items))
+	for _, m := range items {
+		specAck, buildAck, rollup := "pending", "pending", "both_pending"
+		if a, ok := latestAck(m); ok {
+			specAck, buildAck = a.Specifier, a.Builder
+			rollup = mcp.AckRollup(a.Specifier, a.Builder)
+		}
+		rows = append(rows, web.Row{ID: rowID(m), Cells: map[string]web.Cell{
+			"id":        {HTML: idCell(rowID(m))},
+			"title":     {Raw: m.Title},
+			"specifier": {HTML: actorCell(roleActor(m, "specifier"))},
+			"specAck":   {HTML: ackStatePill(specAck)},
+			"builder":   {HTML: actorCell(roleActor(m, "builder"))},
+			"buildAck":  {HTML: ackStatePill(buildAck)},
+			"align":     {HTML: rollupPill(rollup)},
+		}})
+	}
+	return buildSimpleSheet(cols, rows, "")
+}
+
+func buildKindSheet(items []mcp.WorkItem, addLabel string) *web.SheetModel {
+	cols := []web.Column{
+		{Key: "id", Label: "ID", Width: 96, Frozen: true, Readonly: true},
+		{Key: "title", Label: "Title", Width: 320, Frozen: true},
+		{Key: "status", Label: "Status", Width: 150},
+		{Key: "specifier", Label: "Specifier", Width: 160},
+		{Key: "body", Label: "Detail", Width: 460},
+	}
+	rows := make([]web.Row, 0, len(items))
+	for _, it := range items {
+		rows = append(rows, web.Row{ID: rowID(it), Cells: map[string]web.Cell{
+			"id":        {HTML: idCell(rowID(it))},
+			"title":     {Raw: it.Title},
+			"status":    {HTML: statusPill(it.Status)},
+			"specifier": {HTML: actorCell(roleActor(it, "specifier"))},
+			"body":      {Raw: truncate(it.Body, 120)},
+		}})
+	}
+	return buildSimpleSheet(cols, rows, addLabel)
+}
+
+// buildRolesSheet flattens every role binding across milestones into one sheet
+// with per-binding diagnostics (§9.7 — constraints flag, they don't gate).
+func buildRolesSheet(items []mcp.WorkItem) *web.SheetModel {
+	cols := []web.Column{
+		{Key: "milestone", Label: "Milestone", Width: 120, Frozen: true, Readonly: true},
+		{Key: "role", Label: "Role", Width: 130},
+		{Key: "actor", Label: "Actor", Width: 200},
+		{Key: "diag", Label: "Constraint diagnostic", Width: 440, Readonly: true},
+	}
+	var rows []web.Row
+	for _, m := range items {
+		// One diagnostics summary per milestone, shown on its first binding row.
+		diagMsg := ""
+		for i, d := range m.Diagnostics {
+			if i > 0 {
+				diagMsg += " · "
+			}
+			diagMsg += d.Message
+		}
+		for j, rb := range m.RoleBindings {
+			cell := template.HTML(`<span style="font-family:var(--font-mono);font-size:11px;color:var(--ryg-green)">✓ ok</span>`)
+			if j == 0 && diagMsg != "" {
+				cell = template.HTML(`<span class="dx-diag dx-diag--violation">` + template.HTMLEscapeString(diagMsg) + `</span>`)
+			}
+			rows = append(rows, web.Row{ID: rowID(m) + ":" + rb.RoleSlug, Cells: map[string]web.Cell{
+				"milestone": {Raw: rowID(m)},
+				"role":      {HTML: pill(roleVariant(rb.RoleSlug), rb.RoleSlug)},
+				"actor":     {HTML: actorCell(rb.Actor)},
+				"diag":      {HTML: cell},
+			}})
+		}
+	}
+	return buildSimpleSheet(cols, rows, "Bind role to milestone…")
+}
+
+func roleVariant(role string) string {
+	switch role {
+	case "pilot":
+		return "blue"
+	case "leadership":
+		return "plum"
+	default:
+		return "neutral"
+	}
+}
+
+// buildEventsBody renders the read-only signed event log (EventLogView).
+func buildEventsBody(events []mcp.Event) template.HTML {
+	var b strings.Builder
+	b.WriteString(`<div style="background:var(--surface);border:1px solid var(--hairline);border-radius:5px;box-shadow:var(--shadow-1)">`)
+	b.WriteString(`<div class="evt-row" style="background:var(--paper-2);border-bottom:1px solid var(--hairline-strong);font-family:var(--font-mono);font-size:9.5px;color:var(--ink-3);text-transform:uppercase;letter-spacing:0.1em;font-weight:500"><span>Type</span><span>Target</span><span>Actor</span><span style="text-align:right">Time</span></div>`)
+	for _, e := range events {
+		fmt.Fprintf(&b,
+			`<div class="evt-row"><span class="typ">%s</span><span class="tgt">%s</span><span>%s</span><span class="tim">%s</span></div>`,
+			template.HTMLEscapeString(e.Type),
+			template.HTMLEscapeString(e.WorkItemID),
+			template.HTMLEscapeString(e.ActorID),
+			template.HTMLEscapeString(e.Timestamp))
+	}
+	b.WriteString(`</div>`)
+	return template.HTML(b.String())
+}
+
+// buildTaxonomyBody renders the Org / Product / Goals taxonomy trees from meta.
+func buildTaxonomyBody(meta mcp.Meta) template.HTML {
+	var b strings.Builder
+	if len(meta.Taxonomies) == 0 {
+		return template.HTML(`<div class="empty-line">No taxonomies in meta yet. Run <code>pilot init</code> to apply the RE bundle, then add nodes.</div>`)
+	}
+	for _, tx := range meta.Taxonomies {
+		fmt.Fprintf(&b, `<div class="rx-panel" style="margin-bottom:14px"><div class="rx-panel__head"><span class="rx-panel__title">%s</span><span class="rx-panel__meta">%s · %d nodes</span></div><div class="rx-panel__body">`,
+			template.HTMLEscapeString(tx.Name), template.HTMLEscapeString(strings.Join(tx.Levels, " → ")), len(tx.Nodes))
+		if len(tx.Nodes) == 0 {
+			b.WriteString(`<div class="empty-line">empty skeleton — consumer fills nodes</div>`)
+		}
+		for _, n := range tx.Nodes {
+			depth := strings.Count(n.Slug, "/")
+			fmt.Fprintf(&b, `<div class="tx-node"><span class="indent" style="width:%dpx"></span><span style="display:flex;flex-direction:column;flex:1;min-width:0"><span class="name">%s</span><span class="slug">%s</span></span></div>`,
+				8+depth*18, template.HTMLEscapeString(n.Name), template.HTMLEscapeString(n.Slug))
+		}
+		b.WriteString(`</div></div>`)
+	}
+	return template.HTML(b.String())
+}
+
+// buildAttentionBody computes the "For you" buckets client-side from
+// milestones (§9.5). v1 surfaces the substrate-derivable buckets: pending
+// ACKs, rejected ACKs, and diagnostics on your work.
+func buildAttentionBody(items []mcp.WorkItem, me string) template.HTML {
+	type row struct{ chip, variant, id, title, ctx string }
+	var ackPending, rejected, diagnostics []row
+	for _, m := range items {
+		if a, ok := latestAck(m); ok {
+			if a.Specifier == "pending" || a.Builder == "pending" {
+				ackPending = append(ackPending, row{"ACK pending", "y", rowID(m), m.Title,
+					"alignment " + mcp.AckRollup(a.Specifier, a.Builder)})
+			}
+			if a.Specifier == "rejected" || a.Builder == "rejected" {
+				rejected = append(rejected, row{"rejected", "r", rowID(m), m.Title, "an ACK side rejected the commitment"})
+			}
+		}
+		if len(m.Diagnostics) > 0 {
+			msgs := make([]string, 0, len(m.Diagnostics))
+			for _, d := range m.Diagnostics {
+				msgs = append(msgs, d.Message)
+			}
+			diagnostics = append(diagnostics, row{fmt.Sprintf("%d flag", len(m.Diagnostics)), "y", rowID(m), m.Title, strings.Join(msgs, " · ")})
+		}
+	}
+
+	var b strings.Builder
+	section := func(title string, rows []row) {
+		if len(rows) == 0 {
+			return
+		}
+		fmt.Fprintf(&b, `<div class="att-section"><div class="att-section__head"><span class="att-sev att-sev--warn"></span><h3 class="att-section__title">%s</h3><span class="att-section__count">%d</span></div><div class="att-rows">`,
+			template.HTMLEscapeString(title), len(rows))
+		for _, r := range rows {
+			fmt.Fprintf(&b, `<a class="att-row" href="/portfolio?open=%s"><span class="att-sev att-sev--%s"></span><span class="att-row__chip">%s</span><span class="att-row__id dx-id">%s</span><span class="att-row__body"><span class="att-row__title">%s</span><span class="att-row__ctx">%s</span></span></a>`,
+				template.HTMLEscapeString(r.id), template.HTMLEscapeString(r.variant), pill(r.variant, r.chip),
+				template.HTMLEscapeString(r.id), template.HTMLEscapeString(r.title), template.HTMLEscapeString(r.ctx))
+		}
+		b.WriteString(`</div></div>`)
+	}
+	total := len(ackPending) + len(rejected) + len(diagnostics)
+	fmt.Fprintf(&b, `<div class="att"><div class="att-summary"><div class="att-summary__line"><span class="att-summary__count">%d</span><span class="att-summary__lab">things on you.</span></div><div class="att-summary__quip">Specific is kind. The substrate catches every change.</div></div>`, total)
+	section("ACKs needing attention", ackPending)
+	section("Rejected ACKs in your view", rejected)
+	section("Diagnostics on your work", diagnostics)
+	if total == 0 {
+		b.WriteString(`<div class="empty-line">Nothing on you today. Watch for silence — that's usually data.</div>`)
+	}
+	b.WriteString(`</div>`)
+	return template.HTML(b.String())
+}
+
+// buildLeadershipBody renders the in-flight milestone table (the indicator row
+// + pattern blocks land with Phase 6.3 projections).
+func buildLeadershipBody(items []mcp.WorkItem) template.HTML {
+	inflight := make([]mcp.WorkItem, 0)
+	for _, m := range items {
+		if m.Status == "in_flight" {
+			inflight = append(inflight, m)
+		}
+	}
+	sort.Slice(inflight, func(i, j int) bool { return rowID(inflight[i]) < rowID(inflight[j]) })
+	var b strings.Builder
+	fmt.Fprintf(&b, `<div class="rx-panel"><div class="rx-panel__head"><span class="rx-panel__title">In flight</span><span class="rx-panel__meta">%d milestones</span></div><table class="rx-table"><thead><tr><th>ID</th><th>Title</th><th>Alignment</th><th>Pilot</th><th>Status</th></tr></thead><tbody>`, len(inflight))
+	for _, m := range inflight {
+		rollup := "both_pending"
+		if a, ok := latestAck(m); ok {
+			rollup = mcp.AckRollup(a.Specifier, a.Builder)
+		}
+		fmt.Fprintf(&b, `<tr><td class="id">%s</td><td style="font-weight:500">%s</td><td>%s</td><td>%s</td><td>%s</td></tr>`,
+			template.HTMLEscapeString(rowID(m)), template.HTMLEscapeString(m.Title),
+			rollupPill(rollup), actorCell(roleActor(m, "pilot")), statusPill(m.Status))
+	}
+	b.WriteString(`</tbody></table></div><div class="empty-line" style="margin-top:14px">The four leading indicators + pattern blocks land with the Pilot projection cache (Phase 6.3).</div>`)
+	return template.HTML(b.String())
+}
+
+// buildRoadmapItems filters milestones to the public projection: committed or
+// later. (customer_visible is methodology metadata not yet on the substrate
+// WorkItem, so v1 filters on status only — documented follow-up.)
+func buildRoadmapItems(items []mcp.WorkItem) []mcp.WorkItem {
+	out := make([]mcp.WorkItem, 0)
+	for _, m := range items {
+		switch m.Status {
+		case "ack_committed", "in_flight", "shipped":
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+// --- small helpers ---
+
+// rowID prefers the human-facing shared ID, falling back to the work-item ID.
+func rowID(it mcp.WorkItem) string {
+	if it.SharedID != "" {
+		return it.SharedID
+	}
+	return it.ID
+}
+
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "…"
+}

@@ -1,65 +1,68 @@
-// Package handlers holds one HTTP handler per Pilot UI route and a Register
-// helper that maps the twelve GET paths (+ the /static mount) onto a mux.
-// See implementation-plan-v2 §9.2 (the twelve routes across four sidebar
-// sections: Workspace, Methodology, Substrate, External).
+// Package handlers holds one HTTP handler per Pilot UI route and a Server that
+// carries the typed MCP client. See implementation-plan-v2 §9.2 (the twelve
+// routes across four sidebar sections: Workspace, Methodology, Substrate,
+// External).
 //
-// Phase-5 foundation: each handler renders the layout chrome (TopBar,
-// Sidebar, header, hintbar, ⌘K) for its view via the web package. The
-// Portfolio handler additionally renders a live Sheet primitive + slide-over
-// panel against a small hardcoded demo dataset so the gate is visibly
-// working. No live MCP data flows yet — swapping demo data for typed MCP
-// results is a one-function change (see the demoPortfolio* helpers): a
-// handler builds the same *web.SheetModel / *web.PanelModel from MCP rows
-// instead of literals.
+// Each handler fetches live substrate data over MCP (s.Client) and maps it
+// into the generic web view models (see builders.go), then renders the layout
+// chrome (TopBar, Sidebar, header, hintbar, ⌘K) via the web package. With the
+// stub client (no MCP endpoint configured) queries return empty, so views
+// render their empty state and the chrome still works.
 package handlers
 
 import (
 	"bytes"
+	"context"
+	"fmt"
+	"html/template"
 	"log"
 	"net/http"
+	"strings"
 
+	"github.com/lenulus/pf/internal/pilot/mcp"
 	"github.com/lenulus/pf/internal/pilot/web"
 )
 
+// Server carries the dependencies the route handlers need — today just the
+// typed MCP client. Future: session/auth middleware, the projection cache.
+type Server struct {
+	Client mcp.Client
+}
+
+// New returns a Server backed by the given MCP client.
+func New(client mcp.Client) *Server { return &Server{Client: client} }
+
 // Register wires the twelve UI routes, the default-landing redirect, and the
 // embedded static-asset mount onto mux.
-//
-// TODO(phase 5): inject the typed MCP client, session/auth middleware, and
-// the renderer; gate /roadmap as the only unauthenticated route (§9.6).
-func Register(mux *http.ServeMux) {
-	// Static assets (CSS/JS/marks) from the embedded FS.
+func (s *Server) Register(mux *http.ServeMux) {
 	mux.Handle("GET /static/", http.StripPrefix("/static/", web.StaticHandler()))
 
 	// Workspace.
-	mux.HandleFunc("GET /for-you", ForYou) // default landing — Attention view
-	mux.HandleFunc("GET /leadership", Leadership)
-	mux.HandleFunc("GET /portfolio", Portfolio)
-	mux.HandleFunc("GET /ack", Ack)
-	mux.HandleFunc("GET /rfcs", Rfcs)
-	mux.HandleFunc("GET /log", Log)
+	mux.HandleFunc("GET /for-you", s.ForYou) // default landing — Attention view
+	mux.HandleFunc("GET /leadership", s.Leadership)
+	mux.HandleFunc("GET /portfolio", s.Portfolio)
+	mux.HandleFunc("GET /ack", s.Ack)
+	mux.HandleFunc("GET /rfcs", s.Rfcs)
+	mux.HandleFunc("GET /log", s.Log)
 
 	// Methodology.
-	mux.HandleFunc("GET /decisions", Decisions)
-	mux.HandleFunc("GET /outcomes", Outcomes)
+	mux.HandleFunc("GET /decisions", s.Decisions)
+	mux.HandleFunc("GET /outcomes", s.Outcomes)
 
 	// Substrate.
-	mux.HandleFunc("GET /roles", Roles)
-	mux.HandleFunc("GET /taxonomies", Taxonomies)
-	mux.HandleFunc("GET /events", Events)
+	mux.HandleFunc("GET /roles", s.Roles)
+	mux.HandleFunc("GET /taxonomies", s.Taxonomies)
+	mux.HandleFunc("GET /events", s.Events)
 
 	// External — public, unauthenticated (§9.6).
-	mux.HandleFunc("GET /roadmap", Roadmap)
+	mux.HandleFunc("GET /roadmap", s.Roadmap)
 
-	// Default landing redirects to the Attention view.
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/for-you", http.StatusFound)
 	})
 }
 
-// renderLayout renders the standard app shell for a view key, running the
-// optional customise hook to attach a body / sheet / panel. Centralising
-// this keeps each route handler a one-liner and makes the demo→MCP swap
-// local to the per-view customise func.
+// renderLayout renders the standard app shell for a view key.
 func renderLayout(w http.ResponseWriter, key string, customise func(*web.Page)) {
 	page := web.NewPage(key)
 	if customise != nil {
@@ -75,95 +78,169 @@ func renderLayout(w http.ResponseWriter, key string, customise func(*web.Page)) 
 	_, _ = buf.WriteTo(w)
 }
 
+// milestones fetches all milestone work items, logging on error.
+func (s *Server) milestones(ctx context.Context) []mcp.WorkItem {
+	items, err := s.Client.WorkList(ctx, mcp.Filters{Kind: "milestone"})
+	if err != nil {
+		log.Printf("pilot/web: WorkList(milestone): %v", err)
+	}
+	return items
+}
+
+// errBody renders a substrate-unreachable notice as a view body.
+func errBody(err error) template.HTML {
+	return template.HTML(`<div class="empty-line">Substrate query failed: <strong>` +
+		template.HTMLEscapeString(err.Error()) + `</strong>. Is <code>dits-mcp</code> reachable? ` +
+		`(Pilot serves with --mcp-command / --project; without it the stub client renders empty state.)</div>`)
+}
+
 // ForYou serves GET /for-you — the default landing Attention view (§9.5).
-func ForYou(w http.ResponseWriter, r *http.Request) {
+func (s *Server) ForYou(w http.ResponseWriter, r *http.Request) {
+	items := s.milestones(r.Context())
 	renderLayout(w, "attention", func(p *web.Page) {
-		p.Body = todo("/for-you", "the Attention view — ACKs needed, targets passing, stale updates, risks, idle decisions")
+		p.Body = buildAttentionBody(items, "")
+		p.Counters = fmt.Sprintf("%d milestones", len(items))
 	})
 }
 
-// Leadership serves GET /leadership — portfolio rollup + indicators (§9.2).
-func Leadership(w http.ResponseWriter, r *http.Request) {
+// Leadership serves GET /leadership — portfolio rollup (§9.2).
+func (s *Server) Leadership(w http.ResponseWriter, r *http.Request) {
+	items := s.milestones(r.Context())
 	renderLayout(w, "leadership", func(p *web.Page) {
-		p.Body = todo("/leadership", "the four leading indicators, goal rollup, and pattern blocks")
+		p.Body = buildLeadershipBody(items)
 	})
 }
 
-// Portfolio serves GET /portfolio — the Sheet primitive (§9.3). This route
-// renders a live demo sheet + (on ?open=<id>) the slide-over panel, proving
-// the gate. ?group=<key> toggles a column group; ?preset=<id> applies a JTBD
-// preset; ?tab=<key> deep-links a panel tab.
-func Portfolio(w http.ResponseWriter, r *http.Request) {
+// Portfolio serves GET /portfolio — the Sheet primitive over live milestones
+// (§9.3). ?open=<id> opens the slide-over; ?group / ?preset / ?tab adjust it.
+func (s *Server) Portfolio(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
+	items := s.milestones(r.Context())
 	renderLayout(w, "portfolio", func(p *web.Page) {
-		p.Sheet = demoPortfolioSheet(q.Get("preset"), q.Get("group"), q.Get("open"))
-		p.Counters = demoPortfolioCounter()
+		p.Sheet = buildPortfolioSheet(items, q.Get("preset"), q.Get("group"), q.Get("open"))
+		p.Counters = fmt.Sprintf("%d milestones", len(items))
 		if open := q.Get("open"); open != "" {
-			p.Panel = demoPortfolioPanel(open, q.Get("tab"))
+			title := open
+			for _, m := range items {
+				if rowID(m) == open {
+					title = m.Title
+				}
+			}
+			p.Panel = web.NewMilestonePanel(open, title, q.Get("tab"))
 		}
 	})
 }
 
-// Ack serves GET /ack — the bulk-ack workspace (S-ACK / B-ACK pivots).
-func Ack(w http.ResponseWriter, r *http.Request) {
+// Ack serves GET /ack — the bulk-ack workspace (§9.2).
+func (s *Server) Ack(w http.ResponseWriter, r *http.Request) {
+	items := s.milestones(r.Context())
 	renderLayout(w, "ack", func(p *web.Page) {
-		p.Body = todo("/ack", "the bulk-ack workspace — Specifier/Builder ACK pivots with A/P/R inline")
+		p.Sheet = buildAckSheet(items)
+		p.Counters = fmt.Sprintf("%d milestones", len(items))
 	})
 }
 
 // Rfcs serves GET /rfcs — the RFC review queue.
-func Rfcs(w http.ResponseWriter, r *http.Request) {
+func (s *Server) Rfcs(w http.ResponseWriter, r *http.Request) {
+	items, err := s.Client.WorkList(r.Context(), mcp.Filters{Kind: "rfc"})
 	renderLayout(w, "rfcs", func(p *web.Page) {
-		p.Body = todo("/rfcs", "the RFC review queue")
+		if err != nil {
+			p.Body = errBody(err)
+			return
+		}
+		p.Sheet = buildRfcSheet(items)
+		p.Counters = fmt.Sprintf("%d RFCs", len(items))
 	})
 }
 
-// Log serves GET /log — Pilot's Log view.
-func Log(w http.ResponseWriter, r *http.Request) {
+// Log serves GET /log — Pilot's Log (observations across milestones).
+func (s *Server) Log(w http.ResponseWriter, r *http.Request) {
+	events, err := s.Client.EventsList(r.Context(), "work.observation_recorded", "", 100)
 	renderLayout(w, "log", func(p *web.Page) {
-		p.Body = todo("/log", "Pilot's Log — quick-entry row + signed journal")
+		if err != nil {
+			p.Body = errBody(err)
+			return
+		}
+		p.Body = buildEventsBody(events)
+		p.Counters = fmt.Sprintf("%d entries", len(events))
 	})
 }
 
 // Decisions serves GET /decisions — DecisionBlocks.
-func Decisions(w http.ResponseWriter, r *http.Request) {
+func (s *Server) Decisions(w http.ResponseWriter, r *http.Request) {
+	items, err := s.Client.WorkList(r.Context(), mcp.Filters{Kind: "decision_block"})
 	renderLayout(w, "decisions", func(p *web.Page) {
-		p.Body = todo("/decisions", "the DecisionBlocks queue")
+		if err != nil {
+			p.Body = errBody(err)
+			return
+		}
+		p.Sheet = buildKindSheet(items, "Open DecisionBlock…")
+		p.Counters = fmt.Sprintf("%d decisions", len(items))
 	})
 }
 
 // Outcomes serves GET /outcomes — OutcomeAssessments.
-func Outcomes(w http.ResponseWriter, r *http.Request) {
+func (s *Server) Outcomes(w http.ResponseWriter, r *http.Request) {
+	items, err := s.Client.WorkList(r.Context(), mcp.Filters{Kind: "outcome_assessment"})
 	renderLayout(w, "outcomes", func(p *web.Page) {
-		p.Body = todo("/outcomes", "Outcome assessments — verdict + value")
+		if err != nil {
+			p.Body = errBody(err)
+			return
+		}
+		p.Sheet = buildKindSheet(items, "")
+		p.Counters = fmt.Sprintf("%d assessments", len(items))
 	})
 }
 
 // Roles serves GET /roles — role bindings with diagnostics (§9.7).
-func Roles(w http.ResponseWriter, r *http.Request) {
+func (s *Server) Roles(w http.ResponseWriter, r *http.Request) {
+	items := s.milestones(r.Context())
 	renderLayout(w, "roles", func(p *web.Page) {
-		p.Body = todo("/roles", "role bindings with constraint diagnostics")
+		p.Sheet = buildRolesSheet(items)
 	})
 }
 
-// Taxonomies serves GET /taxonomies — Org / Product / Goals tabs.
-func Taxonomies(w http.ResponseWriter, r *http.Request) {
+// Taxonomies serves GET /taxonomies — Org / Product / Goals trees from meta.
+func (s *Server) Taxonomies(w http.ResponseWriter, r *http.Request) {
+	meta, err := s.Client.MetaGet(r.Context())
 	renderLayout(w, "taxonomies", func(p *web.Page) {
-		p.Body = todo("/taxonomies", "the Org / Product / Goals taxonomy trees")
+		if err != nil {
+			p.Body = errBody(err)
+			return
+		}
+		p.Body = buildTaxonomyBody(meta)
 	})
 }
 
-// Events serves GET /events — read-only event log.
-func Events(w http.ResponseWriter, r *http.Request) {
+// Events serves GET /events — the read-only signed event log.
+func (s *Server) Events(w http.ResponseWriter, r *http.Request) {
+	events, err := s.Client.EventsList(r.Context(), "", "", 200)
 	renderLayout(w, "events", func(p *web.Page) {
-		p.Body = todo("/events", "the read-only signed event log")
+		if err != nil {
+			p.Body = errBody(err)
+			return
+		}
+		p.Body = buildEventsBody(events)
+		p.Counters = fmt.Sprintf("%d recent events", len(events))
 	})
 }
 
-// Roadmap serves GET /roadmap — the public, unauthenticated, filtered
+// Roadmap serves GET /roadmap — the public, unauthenticated filtered
 // projection (§9.6). Renders its own minimal layout (no sidebar).
-func Roadmap(w http.ResponseWriter, r *http.Request) {
+func (s *Server) Roadmap(w http.ResponseWriter, r *http.Request) {
+	items := buildRoadmapItems(s.milestones(r.Context()))
 	page := web.NewPage("roadmap")
+	var b strings.Builder
+	if len(items) == 0 {
+		b.WriteString(`<div class="empty-line">No committed milestones to show yet.</div>`)
+	}
+	for _, m := range items {
+		b.WriteString(`<div class="roadmap-card"><span style="flex:1"><div class="ttl">` +
+			template.HTMLEscapeString(m.Title) + `</div><div class="sub">` +
+			template.HTMLEscapeString(productLeaf(m)) + `</div></span><span class="pill">` +
+			string(statusPill(m.Status)) + `</span></div>`)
+	}
+	page.Body = template.HTML(b.String())
 	var buf bytes.Buffer
 	if err := web.Render(&buf, "roadmap", page); err != nil {
 		log.Printf("pilot/web: render roadmap: %v", err)
@@ -172,4 +249,14 @@ func Roadmap(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_, _ = buf.WriteTo(w)
+}
+
+func productLeaf(m mcp.WorkItem) string {
+	for _, c := range m.Classifications {
+		if c.TaxonomySlug == "product" {
+			parts := strings.Split(c.NodeSlug, "/")
+			return strings.Join(parts[max(0, len(parts)-2):], " / ")
+		}
+	}
+	return ""
 }

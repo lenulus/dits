@@ -5,14 +5,20 @@
 // docs/proposals/radical-execution-implementation-plan-v2.md §2 (topology)
 // and §8.1 (binary layout).
 //
-// Phase-4 skeleton: flag parsing + an HTTP server stub wired to the web
-// route table. No real OAuth, signing, MCP, SQLite, or scheduler yet.
+// Subcommands:
+//
+//	pilot init  --project <dir>   apply the RE meta bundle to a DITS project
+//	pilot serve --project <dir>   serve the web UI (default)
+//
+// With no --project, the server runs against the stub MCP client (empty
+// state) so the chrome is browsable without a live substrate.
 package main
 
 import (
 	"context"
 	"errors"
 	"flag"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -20,32 +26,61 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/lenulus/pf/internal/pilot/mcp"
+	"github.com/lenulus/pf/internal/pilot/meta"
 	"github.com/lenulus/pf/internal/pilot/web/handlers"
 )
 
 func main() {
-	// TODO(phase 5/6): add flags for OAuth provider config, MCP endpoint,
-	// SQLite path, KMS/master-key config, and scheduler interval.
-	addr := flag.String("addr", ":7070", "HTTP listen address")
-	flag.Parse()
-
-	log.Printf("pilot skeleton — not yet implemented (listening on %s)", *addr)
-
-	mux := http.NewServeMux()
-	// TODO(phase 5): register the typed MCP client, auth middleware,
-	// session store, and template-backed handlers. For now the route
-	// table maps the twelve UI paths to placeholder handlers.
-	handlers.Register(mux)
-
-	srv := &http.Server{
-		Addr:              *addr,
-		Handler:           mux,
-		ReadHeaderTimeout: 10 * time.Second,
+	log.SetFlags(0)
+	cmd := "serve"
+	args := os.Args[1:]
+	if len(args) > 0 && !isFlag(args[0]) {
+		cmd, args = args[0], args[1:]
 	}
+	switch cmd {
+	case "serve":
+		runServe(args)
+	case "init":
+		runInit(args)
+	default:
+		log.Fatalf("pilot: unknown command %q (want: serve | init)", cmd)
+	}
+}
 
-	// Graceful shutdown on SIGINT/SIGTERM.
+func isFlag(s string) bool { return len(s) > 0 && s[0] == '-' }
+
+// dialClient builds the MCP client from the project flag, falling back to the
+// stub (empty state) when no project is configured.
+func dialClient(ctx context.Context, mcpCmd, project string) (mcp.Client, error) {
+	if project == "" {
+		log.Print("pilot: no --project configured; using stub MCP client (empty state)")
+		return mcp.NewStub(), nil
+	}
+	return mcp.NewClient(ctx, mcp.Config{Command: mcpCmd, ProjectRoot: project})
+}
+
+func runServe(args []string) {
+	fs := flag.NewFlagSet("serve", flag.ExitOnError)
+	addr := fs.String("addr", ":7070", "HTTP listen address")
+	mcpCmd := fs.String("mcp-command", "dits-mcp", "command that launches the DITS MCP server")
+	project := fs.String("project", "", "DITS project root (parent of .dits); empty → stub client")
+	_ = fs.Parse(args)
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	client, err := dialClient(ctx, *mcpCmd, *project)
+	if err != nil {
+		log.Fatalf("pilot: dial MCP: %v", err)
+	}
+	defer client.Close()
+
+	mux := http.NewServeMux()
+	handlers.New(client).Register(mux)
+
+	srv := &http.Server{Addr: *addr, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
+	log.Printf("pilot: serving on %s (project=%q)", *addr, *project)
 
 	errc := make(chan error, 1)
 	go func() {
@@ -53,7 +88,6 @@ func main() {
 			errc <- err
 		}
 	}()
-
 	select {
 	case err := <-errc:
 		log.Fatalf("pilot: server error: %v", err)
@@ -61,8 +95,34 @@ func main() {
 		log.Print("pilot: shutting down")
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		if err := srv.Shutdown(shutdownCtx); err != nil {
-			log.Printf("pilot: graceful shutdown failed: %v", err)
-		}
+		_ = srv.Shutdown(shutdownCtx)
 	}
+}
+
+// runInit applies the embedded RE meta bundle to the target project via the
+// dits_meta_apply MCP tool (plan §10.1). Idempotent at the substrate level.
+func runInit(args []string) {
+	fs := flag.NewFlagSet("init", flag.ExitOnError)
+	mcpCmd := fs.String("mcp-command", "dits-mcp", "command that launches the DITS MCP server")
+	project := fs.String("project", "", "DITS project root (parent of .dits) — required")
+	_ = fs.Parse(args)
+	if *project == "" {
+		log.Fatal("pilot init: --project is required")
+	}
+	if err := meta.Validate(); err != nil {
+		log.Fatalf("pilot init: embedded RE bundle invalid: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	client, err := mcp.NewClient(ctx, mcp.Config{Command: *mcpCmd, ProjectRoot: *project})
+	if err != nil {
+		log.Fatalf("pilot init: dial MCP: %v", err)
+	}
+	defer client.Close()
+
+	if err := client.MetaApply(ctx, meta.Bundle()); err != nil {
+		log.Fatalf("pilot init: apply RE meta bundle: %v", err)
+	}
+	fmt.Println("pilot init: applied RE meta bundle (work kinds, workflows, roles, role constraints, taxonomy skeletons)")
 }
