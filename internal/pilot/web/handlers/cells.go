@@ -7,6 +7,7 @@ package handlers
 import (
 	"fmt"
 	"html/template"
+	"strings"
 
 	"github.com/lenulus/pf/internal/pilot/mcp"
 )
@@ -106,14 +107,83 @@ func rollupPill(rollup string) template.HTML {
 	}
 }
 
-// actorCell renders an actor reference (initials avatar would need the actor
-// directory; for now show the actor id compactly).
+// actorCell renders an actor reference as an initials avatar + name. The
+// substrate ActorRecord carries no display name or colour, so both are derived
+// deterministically from the actor id (Track E enriches this with the live
+// ActorList directory + a searchable picker).
 func actorCell(actor string) template.HTML {
 	if actor == "" {
 		return template.HTML(`<span class="placeholder">unassigned</span>`)
 	}
-	return template.HTML(`<span class="dx-owner"><span class="dx-owner__name">` +
-		template.HTMLEscapeString(actor) + `</span></span>`)
+	return template.HTML(`<span class="dx-owner">` + string(avatarHTML(actor)) +
+		`<span class="dx-owner__name">` + template.HTMLEscapeString(actor) + `</span></span>`)
+}
+
+// avatarHTML renders just the round initials avatar for an actor id, with a
+// deterministic colour. Use inline (role stacks, event log, compact cells).
+func avatarHTML(actor string) template.HTML {
+	if actor == "" {
+		return template.HTML(`<span class="dx-av dx-av--empty" title="unassigned">?</span>`)
+	}
+	return template.HTML(`<span class="dx-av" style="background:` + actorColor(actor) +
+		`" title="` + template.HTMLEscapeString(actor) + `">` +
+		template.HTMLEscapeString(actorInitials(actor)) + `</span>`)
+}
+
+// actorInitials derives up to two uppercase initials from an actor id. Splits
+// on common separators ("e.jackson", "e_jackson", "e-jackson"); otherwise
+// takes the first two letters.
+func actorInitials(actor string) string {
+	var parts []string
+	cur := []rune{}
+	for _, r := range actor {
+		if r == '.' || r == '_' || r == '-' || r == ' ' {
+			if len(cur) > 0 {
+				parts = append(parts, string(cur))
+				cur = nil
+			}
+			continue
+		}
+		cur = append(cur, r)
+	}
+	if len(cur) > 0 {
+		parts = append(parts, string(cur))
+	}
+	up := func(s string) string {
+		if s == "" {
+			return ""
+		}
+		r := []rune(s)[0]
+		if r >= 'a' && r <= 'z' {
+			r -= 32
+		}
+		return string(r)
+	}
+	switch {
+	case len(parts) >= 2:
+		return up(parts[0]) + up(parts[len(parts)-1])
+	case len(parts) == 1 && len([]rune(parts[0])) >= 2:
+		rs := []rune(parts[0])
+		s := string(rs[0]) + string(rs[1])
+		return strings.ToUpper(s)
+	case len(parts) == 1:
+		return strings.ToUpper(parts[0])
+	default:
+		return "?"
+	}
+}
+
+// avatarPalette is a small fixed set echoing the prototype's actor colours.
+var avatarPalette = []string{"#1E3F60", "#5C1E50", "#C56A1A", "#2F7A3D", "#3F424D", "#1F4FB8", "#7A2F2F", "#2F6F7A"}
+
+// actorColor picks a deterministic palette colour from the actor id.
+func actorColor(actor string) string {
+	var h uint32 = 2166136261
+	for _, b := range []byte(actor) {
+		h ^= uint32(b)
+		h *= 16777619
+	}
+	return avatarPalette[int(h)%len(avatarPalette)]
 }
 
 // classCell renders the leaf of a classification node path for a taxonomy, or

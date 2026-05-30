@@ -67,6 +67,10 @@ func (s *Server) Register(mux *http.ServeMux) {
 
 	// Phase-5 write path: POST endpoints that perform one MCP mutation each.
 	s.registerMutations(mux)
+
+	// HTMX partial-swap endpoints (/partials/...) — inline cell edits, panel
+	// tab/row swaps, in-place Attention actions. See partials.go.
+	s.registerPartials(mux)
 }
 
 // renderLayout renders the standard app shell for a view key.
