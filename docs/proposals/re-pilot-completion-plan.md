@@ -194,8 +194,20 @@ marks dependence on the methodology-state model.
   `WorkItem` (new projected fields). Tests in `internal/domain`.
 - **0.3 MCP + client** — tools to set those fields; extend the Pilot DTO with
   the projected fields; client methods. Conformance + client tests.
+- **0.4 Taxonomy-node metadata + set tool** — the Goals axis carries per-node
+  `result` (achieved/partial/missed/in_progress) + `resultNote` (see the
+  prototype `data.jsx` TAXONOMIES.goals). The substrate `TaxonomyNode` already
+  has a generic `Metadata json.RawMessage` field, but **nothing can write it**:
+  `dits_taxonomy_node_add` takes only taxonomy/slug/name/parent_slug and there
+  is no update tool. Add (a) an optional `metadata` arg to `taxonomy_node_add`
+  and (b) a new generic `dits_taxonomy_node_set(taxonomy, slug, metadata)` tool
+  + `meta.go` helper + client method, storing `{result, resultNote}` (and any
+  future per-node projection) in `Metadata`. Keep it methodology-agnostic — it's
+  opaque node metadata, not a goals-specific field. Surface `Metadata` on the
+  Pilot `Taxonomy`/`TaxonomyNode` DTO. Conformance + client tests.
 - **Acceptance:** a milestone round-trips RYG/stages/target/risks/next/narrative/
-  visibility through MCP and back into the DTO.
+  visibility through MCP and back into the DTO; a goals node round-trips its
+  `result`/`resultNote` via `taxonomy_node_set` and back through `MetaGet`.
 
 ### Track B — sheet interactivity
 - **B.1 HTMX foundation** — add htmx; a `/partials/sheet/cell` swap convention.
@@ -254,9 +266,14 @@ marks dependence on the methodology-state model.
 - **D.5 Roles** — call `RoleBindingsList`/`DiagnosticsGet`; show the full
   diagnostic text + actor role; the "constraints flag, don't gate" banner is
   present — keep it. Add bind/unbind from the sheet.
-- **D.6 Taxonomies** — node CRUD (`TaxonomyNode{Add,Move,Retire}`), the Goals
-  **result** column (achieved/partial/missed/in_progress), and the per-node
-  "used by N milestones" count.
+- **D.6 Taxonomies** — node CRUD (`TaxonomyNode{Add,Move,Retire}` + the new
+  `taxonomy_node_set` from 0.4), the org/product/goals tabs, the Goals
+  **result** column (achieved/partial/missed/in_progress + resultNote) edited
+  via the node-set tool `[needs 0.4]`, and the per-node "used by N milestones"
+  count (computed Pilot-side: count milestones whose org/product classification
+  matches the node slug — no substrate change). Classification of a work item
+  into a node already works (panel + B.2 inline picker); retired nodes are
+  already rejected by the substrate (`TaxonomyHasActiveNode`).
 
 ### Track E — identity & cross-cutting
 - **E.1 Actor directory** — call `ActorList`; render initials avatars + names
