@@ -28,6 +28,7 @@ import (
 
 	"github.com/lenulus/pf/internal/pilot/mcp"
 	"github.com/lenulus/pf/internal/pilot/meta"
+	"github.com/lenulus/pf/internal/pilot/scheduler"
 	"github.com/lenulus/pf/internal/pilot/web/handlers"
 )
 
@@ -65,6 +66,8 @@ func runServe(args []string) {
 	addr := fs.String("addr", ":7070", "HTTP listen address")
 	mcpCmd := fs.String("mcp-command", "dits-mcp", "command that launches the DITS MCP server")
 	project := fs.String("project", "", "DITS project root (parent of .dits); empty → stub client")
+	schedule := fs.Bool("schedule", false, "run the RE scheduler (outcome assessments, SLA overdue, decision escalation)")
+	scheduleInterval := fs.Duration("schedule-interval", scheduler.DefaultInterval, "RE scheduler cycle interval")
 	_ = fs.Parse(args)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -75,6 +78,16 @@ func runServe(args []string) {
 		log.Fatalf("pilot: dial MCP: %v", err)
 	}
 	defer client.Close()
+
+	if *schedule {
+		sched := scheduler.New(client, *scheduleInterval)
+		go func() {
+			log.Printf("pilot: RE scheduler running every %s", *scheduleInterval)
+			if err := sched.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+				log.Printf("pilot: scheduler stopped: %v", err)
+			}
+		}()
+	}
 
 	mux := http.NewServeMux()
 	handlers.New(client).Register(mux)
