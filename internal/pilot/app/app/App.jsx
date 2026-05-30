@@ -292,7 +292,7 @@ function App() {
     activeId, selectedIds, pivot, groupBy, filters, collapsedGroups };
 
   /* ----------- View routing ----------- */
-  const currentUser = 'ejackson';
+  const currentUser = (D2 && D2.CURRENT_USER) || 'ejackson';
   const VIEWS = {
     attention: {
       label:'For you', tag:'ATTENTION', kind:'home',

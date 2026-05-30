@@ -45,6 +45,27 @@ type apiPayload struct {
 	EVENT_LOG        []apiEvent              `json:"EVENT_LOG"`
 	ACK_AMENDMENTS   map[string][]apiAmend   `json:"ACK_AMENDMENTS"`
 	INDICATORS       map[string]apiIndicator `json:"INDICATORS"`
+	// CURRENT_USER is the actor the "For you" / ACK views treat as "me". Until
+	// auth lands (Track F), default to the actor with the most role bindings so
+	// the attention view has content; the app falls back to a constant.
+	CURRENT_USER string `json:"CURRENT_USER"`
+}
+
+// pickCurrentUser returns the actor with the most role bindings, or "".
+func pickCurrentUser(bindings []apiRoleBinding) string {
+	counts := map[string]int{}
+	best, bestN := "", 0
+	for _, b := range bindings {
+		if b.Actor == nil || *b.Actor == "" {
+			continue
+		}
+		a := *b.Actor
+		counts[a]++
+		if counts[a] > bestN {
+			best, bestN = a, counts[a]
+		}
+	}
+	return best
 }
 
 type apiActor struct {
@@ -265,6 +286,7 @@ func (s *Server) buildAPIData(ctx context.Context) apiPayload {
 	// ackHistory + ack_amendments are derived from the ack_* event stream.
 	ackEvents := ackEventsByWorkItem(allEvents)
 
+	roleBindings := buildAPIRoleBindings(milestones, shared)
 	return apiPayload{
 		ACTORS:           buildAPIActors(actorRecs, milestones),
 		TAXONOMIES:       buildAPITaxonomies(meta),
@@ -275,10 +297,11 @@ func (s *Server) buildAPIData(ctx context.Context) apiPayload {
 		PILOT_LOG:        buildAPIPilotLog(allEvents, shared),
 		DECISIONS:        buildAPIDecisions(decisions, shared),
 		OUTCOMES:         buildAPIOutcomes(outcomes, shared),
-		ROLE_BINDINGS:    buildAPIRoleBindings(milestones, shared),
+		ROLE_BINDINGS:    roleBindings,
 		EVENT_LOG:        buildAPIEventLog(allEvents, shared),
 		ACK_AMENDMENTS:   buildAPIAmendments(allEvents, shared),
 		INDICATORS:       s.buildAPIIndicators(ctx),
+		CURRENT_USER:     pickCurrentUser(roleBindings),
 	}
 }
 
