@@ -18,7 +18,7 @@ the inline-mutation UI are the main remaining build.
 | 2 — ACK lifecycle (core) | §6 | ✅ Done | 5 events, `ack.go` (AckState/AckRollup/ComputeAckRollup), reducer materialization, workops auto-clear orchestration. |
 | 3 — MCP surface buildout | §7 | ✅ Done | 18 tools (classification, roles, ACK, diagnostics, meta admin, identity, events, filtered work_list). Also fixed a sqlite persistence gap the new read tools exposed. |
 | 4 — Pilot scaffold | §8 | ◑ Partial | Binary + package tree + forbidden-imports lint ✅. Typed MCP client over stdio ✅. **OAuth/sessions/custodial signing: still stubs** (see follow-ups). |
-| 5 — Pilot UI | §9 | ◑ Partial | Foundation (CSS lift, layout, Sheet primitive, slide-over panel, ⌘K) ✅. All 12 views wired to **live MCP data** ✅; Leadership shows the live four-indicator KPI row. **Inline cell mutation + full panel-tab bodies + filter-chip UI: placeholder** (read path complete; write path pending). |
+| 5 — Pilot UI | §9 | ◑ Partial | Foundation (CSS lift, layout, Sheet primitive, slide-over panel, ⌘K) ✅. All 12 views wired to **live MCP data** ✅; Leadership shows the live four-indicator KPI row. **Mutation write path live in the slide-over panel** (status, ACK file/accept/reject/amend, role bind, classify — each a signed event). Still pending: in-sheet inline cell editing, the remaining panel tab bodies (Stages/Deps/Updates/Receipts), filter-chip UI, bulk actions. |
 | 6 — Scheduler / projections / meta | §10 | ✅ Done | RE meta bundle + `pilot init` ✅. Indicator projections (4 indicators + cache) ✅, rendered on Leadership. Scheduler ✅ (`pilot serve --schedule`) — verified auto-creating an outcome_assessment for a shipped milestone over MCP. |
 
 ## Verified end-to-end
@@ -64,11 +64,12 @@ each with a recommended resolution:
    `dits_review_request(id, reviewer_role)` tool would let it target
    Leadership explicitly.
 
-3. **Inline-mutation UI (Phase 5 write path).** The views render live data
-   read-only; cell edits, the panel ACK/Status/Stages/Deps tab bodies, the
-   filter-chip builder, and bulk actions still need HTMX POST handlers that
-   call the client mutators (Classify/BindRole/Ack*/SetStatus — all present
-   on the client). No substrate work required; this is Pilot-side UI.
+3. **Mutation UI (Phase 5 write path).** ✅ The slide-over panel is now
+   editable — status, ACK file/accept/reject/amend, role bind, and classify
+   each POST to a one-mutation endpoint and land as signed events. Still
+   pending: in-sheet inline cell editing, the Stages/Deps/Updates/Receipts
+   panel tab bodies, the filter-chip builder, and bulk actions. No substrate
+   work required; this is Pilot-side UI over the existing client mutators.
 
 4. **Indicator source.** Per §10.3, indicators are computed in Pilot
    (keeps DITS substrate-clean). Promote to a DITS-side `indicators_get`
