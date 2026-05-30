@@ -104,11 +104,12 @@ func portfolioColumns() []web.Column {
 // into the sheet builder (preset/group/open + the active filter set). The
 // coordinator constructs it from r.URL.Query() (see the report).
 type PortfolioParams struct {
-	Preset  string
-	Group   string // band-toggle key (column-group collapse)
-	Open    string // active panel record id
-	GroupBy string // row group-by: "" | status | team | product | quarter
-	Filters []web.FilterPill
+	Preset       string
+	Open         string   // active panel record id
+	GroupBy      string   // row group-by: "" | status | team | product | quarter
+	Collapsed    []string // the full collapsed-group set (band toggles send this)
+	CollapsedSet bool     // whether ?collapsed was present (authoritative over preset)
+	Filters      []web.FilterPill
 }
 
 // PortfolioParamsFromQuery parses the Portfolio handler's URL query into a
@@ -130,9 +131,20 @@ func PortfolioParamsFromQuery(q map[string][]string, items []mcp.WorkItem) Portf
 	}
 	p := PortfolioParams{
 		Preset:  get("preset"),
-		Group:   get("group"),
 		Open:    get("open"),
 		GroupBy: groupBy,
+	}
+	// The band toggles send the full collapsed-group set as ?collapsed=a,b,c
+	// (an empty value means "everything expanded"). When present it is
+	// authoritative over the preset's default set, so each group folds/unfolds
+	// independently rather than the URL holding a single toggled group.
+	if raw, ok := q["collapsed"]; ok {
+		p.CollapsedSet = true
+		for _, g := range strings.Split(raw[0], ",") {
+			if g = strings.TrimSpace(g); g != "" {
+				p.Collapsed = append(p.Collapsed, g)
+			}
+		}
 	}
 	fields := portfolioFilterFields(items)
 	for _, fd := range fields {
@@ -173,9 +185,18 @@ func buildPortfolioSheet(items []mcp.WorkItem, p PortfolioParams) *web.SheetMode
 	if preset == "" {
 		preset = "overview"
 	}
-	collapsed := web.CollapsedFromPreset(preset)
-	if p.Group != "" {
-		collapsed[p.Group] = !collapsed[p.Group]
+	// Collapsed set: the explicit band-toggle set when present, else the
+	// preset's default. With an explicit set, reflect which preset (if any) it
+	// matches in the toolbar — otherwise "custom".
+	var collapsed map[string]bool
+	if p.CollapsedSet {
+		collapsed = map[string]bool{}
+		for _, g := range p.Collapsed {
+			collapsed[g] = true
+		}
+		preset = presetForCollapsed(collapsed)
+	} else {
+		collapsed = web.CollapsedFromPreset(preset)
 	}
 
 	// Server-side filter: AND every active chip.
@@ -224,6 +245,27 @@ func buildPortfolioSheet(items []mcp.WorkItem, p PortfolioParams) *web.SheetMode
 	}
 	s.ComputeLayout()
 	return s
+}
+
+// presetForCollapsed returns the preset whose default collapsed-set equals the
+// given set, or "custom" when none matches (mirrors views.jsx presetFor).
+func presetForCollapsed(set map[string]bool) string {
+	for _, p := range web.PortfolioPresets {
+		if len(p.Collapsed) != len(set) {
+			continue
+		}
+		match := true
+		for _, g := range p.Collapsed {
+			if !set[g] {
+				match = false
+				break
+			}
+		}
+		if match {
+			return p.Value
+		}
+	}
+	return "custom"
 }
 
 // portfolioRow renders one milestone into the Portfolio cell map.

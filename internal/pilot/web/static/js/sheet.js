@@ -183,13 +183,22 @@
       row.addEventListener("click", function () { quickAdd(addKind); });
     });
 
-    // Column-group band toggle: navigate with ?group=<key> so the server
-    // recomputes the collapsed set.
+    // Column-group band toggle: flip THIS group within the full collapsed set
+    // (read from the rendered bands) and navigate with ?collapsed=a,b,c so each
+    // group folds independently. ?collapsed= (empty) means everything expanded.
     wrap.querySelectorAll("[data-band-toggle]").forEach(function (band) {
       band.addEventListener("click", function () {
         var key = band.getAttribute("data-group");
         if (!key) return;
-        navWith({ group: key });
+        var set = [];
+        wrap.querySelectorAll("[data-band-toggle]").forEach(function (b) {
+          var k = b.getAttribute("data-group");
+          if (!k) return;
+          var collapsed = b.classList.contains("sht-band--collapsed");
+          if (k === key) collapsed = !collapsed; // flip the clicked group
+          if (collapsed) set.push(k);
+        });
+        navWith({ collapsed: set.join(","), group: null });
       });
     });
 
@@ -208,7 +217,8 @@
 
   function initToolbar(tb) {
     tb.querySelectorAll("[data-preset]").forEach(function (b) {
-      b.addEventListener("click", function () { navWith({ preset: b.getAttribute("data-preset") }); });
+      // A preset reasserts its default collapsed-set, so drop any custom set.
+      b.addEventListener("click", function () { navWith({ preset: b.getAttribute("data-preset"), collapsed: null }); });
     });
     tb.querySelectorAll("[data-groupby]").forEach(function (b) {
       b.addEventListener("click", function () { navWith({ groupby: b.getAttribute("data-groupby") }); });
