@@ -46,6 +46,10 @@ func New(client mcp.Client) *Server {
 func (s *Server) Register(mux *http.ServeMux) {
 	mux.Handle("GET /static/", http.StripPrefix("/static/", web.StaticHandler()))
 
+	// The prototype React app (data-backed pivot) is served at /app. It coexists
+	// with the hand-rolled server-rendered views during the transition.
+	s.registerApp(mux)
+
 	// Workspace.
 	mux.HandleFunc("GET /for-you", s.ForYou) // default landing — Attention view
 	mux.HandleFunc("GET /leadership", s.Leadership)
