@@ -80,7 +80,7 @@
       if (editing) {
         if (e.key === "Escape") {
           e.preventDefault();
-          cancelEditors();
+          cancelOpenEditors(wrap);
         }
         return;
       }
