@@ -48,6 +48,17 @@ type WorkItem struct {
 	RoleBindings    []RoleBinding    `json:"RoleBindings"`
 	Acks            []Ack            `json:"Acks"`
 	Diagnostics     []Diagnostic     `json:"Diagnostics"`
+	Relations       []Relation       `json:"Relations"`
+	// Timestamps are RFC3339 strings (domain.WorkItem has no json tags, so
+	// these arrive PascalCase). Empty when the substrate omitted them.
+	CreatedAt string `json:"CreatedAt"`
+	UpdatedAt string `json:"UpdatedAt"`
+}
+
+// Relation links this work item to another (depends_on, relates_to, …).
+type Relation struct {
+	Type           string `json:"Type"`
+	TargetWorkItem string `json:"TargetWorkItem"`
 }
 
 // Classification places a work item within a node of a taxonomy.
