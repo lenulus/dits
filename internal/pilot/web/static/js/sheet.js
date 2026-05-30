@@ -21,11 +21,25 @@
   /* ---- editable-cell helpers (HTMX does the actual fetch/swap) ---- */
   function openEditor(cell) {
     if (!cell || !cell.hasAttribute("data-editable")) return;
-    if (cell.querySelector(".is-editing")) return; // already editing
-    // The cell carries hx-get + hx-trigger="edit"; fire it.
+    if (cell.querySelector("form.is-editing")) return; // already editing this one
+    cancelOpenEditors(); // only one editor open at a time
+    cell.dataset.display = cell.innerHTML; // remember the display for cancel
+    // The cell carries hx-get + hx-trigger="edit"; fire it (swaps the editor in).
     if (window.htmx) {
       window.htmx.trigger(cell, "edit");
     }
+  }
+
+  // cancelOpenEditors restores every cell with an open editor to its saved
+  // display markup (no mutation), so editors never pile up across cells.
+  function cancelOpenEditors(wrap) {
+    var root = wrap || document;
+    root.querySelectorAll("[data-editable]").forEach(function (cell) {
+      if (cell.querySelector("form.is-editing") && cell.dataset.display != null) {
+        cell.innerHTML = cell.dataset.display;
+        delete cell.dataset.display;
+      }
+    });
   }
 
   function initSheet(wrap) {
@@ -93,33 +107,25 @@
         if (box) { box.checked = !box.checked; syncRowSel(box); }
       }
       else if (e.key === "Escape") {
-        clearSelection();
+        // Esc cancels an open editor first, otherwise clears selection.
+        if (wrap.querySelector("[data-editable] form.is-editing")) cancelOpenEditors(wrap);
+        else clearSelection();
       }
     });
 
-    function cancelEditors() {
-      // Restore the cell to its display value by re-issuing the row (cheapest
-      // path: reload the editor's host cell from the server is overkill, so we
-      // just remove the editor form; the next swap/refresh repaints it).
-      wrap.querySelectorAll("[data-editable] form.is-editing").forEach(function (f) {
-        var cell = f.closest("[data-editable]");
-        f.remove();
-        if (cell && !cell.textContent.trim()) {
-          cell.innerHTML = '<span class="placeholder">—</span>';
-        }
-      });
-      wrap.focus();
-    }
-
-    // Click an editable cell → open its editor. Click a nav cell → open panel.
+    // Click an editable cell → open its editor (closing any other). Click a nav
+    // cell → open the record panel. Click anywhere else → cancel open editors.
     wrap.addEventListener("click", function (e) {
       var nav = e.target.closest("[data-nav-cell]");
       var editable = e.target.closest("[data-editable]");
       if (nav && !editable) {
+        cancelOpenEditors(wrap);
         openRow(nav.closest("tr[data-row-id]"));
         return;
       }
       if (editable) {
+        // A click inside the already-open editor (its form) must not re-open.
+        if (editable.querySelector("form.is-editing")) return;
         var tr = editable.closest("tr[data-row-id]");
         if (tr) {
           focus.r = rows().indexOf(tr);
@@ -128,7 +134,15 @@
           paint();
         }
         openEditor(editable);
+        return;
       }
+      // Clicked a non-editable, non-nav area inside the sheet → cancel editors.
+      cancelOpenEditors(wrap);
+    });
+
+    // A click anywhere outside this sheet cancels any open editor too.
+    document.addEventListener("click", function (e) {
+      if (!wrap.contains(e.target)) cancelOpenEditors(wrap);
     });
 
     /* ---- row selection + bulk bar ---- */

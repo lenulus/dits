@@ -79,7 +79,7 @@ var valueOptions = []web.Option{
 func portfolioColumns() []web.Column {
 	return []web.Column{
 		{Key: "id", Label: "ID", Width: 96, Group: "identity", Frozen: true, Readonly: true},
-		{Key: "title", Label: "Title", Width: 260, Group: "identity", Frozen: true, Edit: "text"},
+		{Key: "title", Label: "Title", Width: 260, Group: "identity", Frozen: true},
 		{Key: "product", Label: "Product", Width: 150, Group: "classification", Edit: "taxonomy"},
 		{Key: "org", Label: "Org", Width: 150, Group: "classification", Edit: "taxonomy"},
 		{Key: "status", Label: "Status", Width: 140, Group: "health", Edit: "select", Options: statusOptions},
@@ -766,7 +766,7 @@ func buildSimpleSheet(cols []web.Column, rows []web.Row, addLabel, addKind strin
 func buildRfcSheet(items []mcp.WorkItem) *web.SheetModel {
 	cols := []web.Column{
 		{Key: "id", Label: "ID", Width: 96, Frozen: true, Readonly: true},
-		{Key: "title", Label: "Title", Width: 280, Frozen: true, Edit: "text"},
+		{Key: "title", Label: "Title", Width: 280, Frozen: true},
 		{Key: "status", Label: "Status", Width: 160, Edit: "select", Options: rfcStatusOptions},
 		{Key: "specifier", Label: "Specifier", Width: 160, Edit: "actor"},
 		{Key: "target", Label: "Target", Width: 120, Edit: "target"},
@@ -791,7 +791,7 @@ func buildRfcSheet(items []mcp.WorkItem) *web.SheetModel {
 func buildAckSheet(items []mcp.WorkItem) *web.SheetModel {
 	cols := []web.Column{
 		{Key: "id", Label: "ID", Width: 96, Frozen: true, Readonly: true},
-		{Key: "title", Label: "Milestone", Width: 280, Frozen: true, Edit: "text"},
+		{Key: "title", Label: "Milestone", Width: 280, Frozen: true},
 		{Key: "specifier", Label: "Specifier", Width: 150, Edit: "actor"},
 		{Key: "specAck", Label: "Specifier ACK", Width: 150, Edit: "ack"},
 		{Key: "builder", Label: "Builder", Width: 150, Edit: "actor"},
@@ -879,7 +879,7 @@ func buildOutcomesSheet(items []mcp.WorkItem, shared map[string]string) *web.She
 func buildKindSheet(items []mcp.WorkItem, addLabel, addKind string) *web.SheetModel {
 	cols := []web.Column{
 		{Key: "id", Label: "ID", Width: 96, Frozen: true, Readonly: true},
-		{Key: "title", Label: "Title", Width: 320, Frozen: true, Edit: "text"},
+		{Key: "title", Label: "Title", Width: 320, Frozen: true},
 		{Key: "status", Label: "Status", Width: 150, Edit: "select", Options: statusOptions},
 		{Key: "specifier", Label: "Specifier", Width: 160, Edit: "actor"},
 		{Key: "body", Label: "Detail", Width: 460, Readonly: true},
