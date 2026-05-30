@@ -4,10 +4,15 @@
 **Branch:** `pilot`
 
 A running record of what has landed against the v2 plan, and the
-follow-ups deliberately left open. Honest about depth: the substrate half
-(Phases 0–3) is complete and fully tested; Pilot is a working live
-frontend with the methodology automation in place; the identity bridge and
-the inline-mutation UI are the main remaining build.
+follow-ups deliberately left open. As of the Pilot completion build
+(`re-pilot-completion-plan.md`), the prototype-parity gap is closed: the
+substrate half (Phases 0–3) plus the generic methodology-state model
+(Track 0: `work.field_set` / `work.schedule_set` + `taxonomy_node_set`) are
+complete and tested, and Pilot drives the full v2 §13 loop in the browser —
+every tab editable, all 12 views matching the prototype, every change a
+signed event on the DAG. The remaining open item is real external-IdP OAuth
+(the custodial signing/session infrastructure is built behind a provider
+interface with a working dev provider).
 
 ## Status by phase
 
@@ -17,8 +22,8 @@ the inline-mutation UI are the main remaining build.
 | 1 — Substrate primitives | §5 | ✅ Done | Taxonomies/Roles/RoleConstraints, 4 generic events, `internal/constraints` (4 predicates), workops Classify/Declassify/BindRole/UnbindRole. PROJ-176 golden. |
 | 2 — ACK lifecycle (core) | §6 | ✅ Done | 5 events, `ack.go` (AckState/AckRollup/ComputeAckRollup), reducer materialization, workops auto-clear orchestration. |
 | 3 — MCP surface buildout | §7 | ✅ Done | 18 tools (classification, roles, ACK, diagnostics, meta admin, identity, events, filtered work_list). Also fixed a sqlite persistence gap the new read tools exposed. |
-| 4 — Pilot scaffold | §8 | ◑ Partial | Binary + package tree + forbidden-imports lint ✅. Typed MCP client over stdio ✅. **OAuth/sessions/custodial signing: still stubs** (see follow-ups). |
-| 5 — Pilot UI | §9 | ◑ Partial | Foundation (CSS lift, layout, Sheet primitive, slide-over panel, ⌘K) ✅. All 12 views wired to **live MCP data** ✅; Leadership shows the live four-indicator KPI row. **Mutation write path live in the slide-over panel** (status, ACK file/accept/reject/amend, role bind, classify — each a signed event). Still pending: in-sheet inline cell editing, the remaining panel tab bodies (Stages/Deps/Updates/Receipts), filter-chip UI, bulk actions. |
+| 4 — Pilot scaffold | §8 | ✅ Done | Binary + package tree + forbidden-imports lint ✅. Typed MCP client over stdio ✅. Custodial signing/sessions/store made real in Pilot's tree (`internal/pilot/{auth,signing,store}`) — Ed25519 over a Pilot-side canonical-JSON mirror, AES-GCM key wrapper, SQLite store, session manager + dev provider. Remaining seam: real OAuth/OIDC + KMS wrapper (both behind interfaces). |
+| 5 — Pilot UI | §9 | ✅ Done (prototype parity) | All 12 views match the prototype. HTMX adopted (`/partials/...` swaps). In-sheet inline cell editing (status/RYG/target/ACK/role/classification/visibility), filter-chip builder, group-by, bulk bar, quick-add. All six milestone panel tabs editable (ACK/Status/Stages/Deps/Updates/Receipts) + RFC/Decision/Outcome detail panels. Attention's 9 buckets with in-place actions; Leadership pattern blocks + goal-health rollup; Pilot's Log quick-entry; Taxonomy node CRUD + Goals result column. Actor directory + ActorPicker; ⌘K record jump-in/create. Every change is a signed event on the DAG. Verified end-to-end in the browser. |
 | 6 — Scheduler / projections / meta | §10 | ✅ Done | RE meta bundle + `pilot init` ✅. Indicator projections (4 indicators + cache) ✅, rendered on Leadership. Scheduler ✅ (`pilot serve --schedule`) — verified auto-creating an outcome_assessment for a shipped milestone over MCP. |
 
 ## Verified end-to-end
@@ -41,10 +46,16 @@ indicators computed Pilot-side from the event log.
 
 ## Follow-ups / known gaps
 
-These were surfaced during implementation and are deliberately deferred,
-each with a recommended resolution:
+**Resolved in the completion build:** (1) `dits_event_submit` now appends a
+pre-signed event after verifying its Ed25519 signature against the actor's
+registered key, and Pilot reimplements `CanonicalEventJSON` + custodial
+signing in its own tree (dual-pinned vector test proves the two agree). (2)
+`dits_review_request(id, reviewer_role, scope)` emits `work.review_requested`;
+the scheduler's idle-DecisionBlock escalation now uses it. (3) The inline
+mutation UI is complete (in-sheet editing, all panel tabs, filter/group/bulk,
+the per-view richness). The historical context below is retained.
 
-1. **Custodial signing needs a "submit pre-signed event" MCP tool.**
+1. **Custodial signing needs a "submit pre-signed event" MCP tool.** _(Done — see above.)_
    Plan §8.2 has Pilot sign each mutation with the user's custodial key and
    submit it via MCP, preserving per-user attribution. But today's `dits_*`
    mutation tools construct *and sign* events server-side as the dits-mcp
