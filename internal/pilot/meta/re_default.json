@@ -1,0 +1,127 @@
+{
+  "work_kinds": [
+    { "slug": "rfc", "name": "RFC", "workflow_slug": "rfc", "description": "A proposal: Specifiers propose, Leadership approves, then it is resourced into milestones." },
+    { "slug": "milestone", "name": "Milestone", "workflow_slug": "milestone", "description": "A committed unit of delivery carrying the Specifier/Builder ACK lifecycle." },
+    { "slug": "decision_block", "name": "DecisionBlock", "workflow_slug": "decision_block", "description": "A recorded impasse the team is stuck on; idle ones auto-escalate to Leadership." },
+    { "slug": "outcome_assessment", "name": "OutcomeAssessment", "workflow_slug": "outcome_assessment", "description": "A post-ship verdict on whether a milestone delivered its target outcome." },
+    { "slug": "goal", "name": "Goal", "workflow_slug": "goal", "description": "A lifecycle-bearing objective that milestones are aligned to (distinct from the goals taxonomy)." }
+  ],
+  "workflows": [
+    {
+      "slug": "rfc",
+      "name": "RFC",
+      "statuses": [
+        { "slug": "draft", "name": "Draft", "category": "open" },
+        { "slug": "leadership_review", "name": "Leadership review", "category": "in_progress" },
+        { "slug": "approved", "name": "Approved", "category": "in_progress" },
+        { "slug": "backlog", "name": "Backlog", "category": "open" },
+        { "slug": "resourced", "name": "Resourced", "category": "done" },
+        { "slug": "rejected", "name": "Rejected", "category": "done" }
+      ],
+      "transitions": [
+        { "from": "draft", "to": "leadership_review" },
+        { "from": "leadership_review", "to": "approved" },
+        { "from": "leadership_review", "to": "rejected" },
+        { "from": "approved", "to": "backlog" },
+        { "from": "backlog", "to": "resourced" }
+      ]
+    },
+    {
+      "slug": "milestone",
+      "name": "Milestone",
+      "statuses": [
+        { "slug": "draft", "name": "Draft", "category": "open" },
+        { "slug": "ack_filed", "name": "ACK filed", "category": "in_progress" },
+        { "slug": "ack_committed", "name": "ACK committed", "category": "in_progress" },
+        { "slug": "in_flight", "name": "In flight", "category": "in_progress" },
+        { "slug": "shipped", "name": "Shipped", "category": "done" },
+        { "slug": "aborted", "name": "Aborted", "category": "done" }
+      ],
+      "transitions": [
+        { "from": "draft", "to": "ack_filed" },
+        { "from": "ack_filed", "to": "ack_committed" },
+        { "from": "ack_committed", "to": "in_flight" },
+        { "from": "in_flight", "to": "shipped" },
+        { "from": "*", "to": "aborted" }
+      ]
+    },
+    {
+      "slug": "goal",
+      "name": "Goal",
+      "statuses": [
+        { "slug": "proposed", "name": "Proposed", "category": "open" },
+        { "slug": "committed", "name": "Committed", "category": "in_progress" },
+        { "slug": "achieved", "name": "Achieved", "category": "done" },
+        { "slug": "abandoned", "name": "Abandoned", "category": "done" }
+      ],
+      "transitions": [
+        { "from": "proposed", "to": "committed" },
+        { "from": "committed", "to": "achieved" },
+        { "from": "*", "to": "abandoned" }
+      ]
+    },
+    {
+      "slug": "decision_block",
+      "name": "DecisionBlock",
+      "statuses": [
+        { "slug": "open", "name": "Open", "category": "open" },
+        { "slug": "resolved", "name": "Resolved", "category": "done" },
+        { "slug": "escalated", "name": "Escalated", "category": "in_progress" }
+      ],
+      "transitions": [
+        { "from": "open", "to": "resolved" },
+        { "from": "open", "to": "escalated" },
+        { "from": "escalated", "to": "resolved" }
+      ]
+    },
+    {
+      "slug": "outcome_assessment",
+      "name": "OutcomeAssessment",
+      "statuses": [
+        { "slug": "pending", "name": "Pending", "category": "open" },
+        { "slug": "completed", "name": "Completed", "category": "done" },
+        { "slug": "overdue", "name": "Overdue", "category": "open" }
+      ],
+      "transitions": [
+        { "from": "pending", "to": "completed" },
+        { "from": "pending", "to": "overdue" },
+        { "from": "overdue", "to": "completed" }
+      ]
+    }
+  ],
+  "roles": [
+    { "slug": "specifier", "name": "Specifier", "cardinality": "exactly_one", "description": "Owns the what/why; stands behind the commitment via the Specifier ACK." },
+    { "slug": "builder", "name": "Builder", "cardinality": "exactly_one", "description": "Owns the how; stands behind feasibility via the Builder ACK." },
+    { "slug": "pilot", "name": "Pilot", "cardinality": "exactly_one", "description": "Independent steward of execution health; must not collapse into Specifier or Builder." },
+    { "slug": "reviewer", "name": "Reviewer", "cardinality": "many", "description": "Reviews RFCs and milestones; advisory." },
+    { "slug": "leadership", "name": "Leadership", "cardinality": "many", "description": "Approves RFCs and adjudicates escalations." }
+  ],
+  "role_constraints": [
+    {
+      "slug": "no_role_collapse",
+      "name": "No role collapse",
+      "predicate": "distinct_actors",
+      "args": { "roles": ["specifier", "builder", "pilot"] },
+      "severity": "violation"
+    },
+    {
+      "slug": "pilot_independence",
+      "name": "Pilot independence",
+      "predicate": "not_reports_to_within",
+      "args": { "role": "pilot", "other_roles": ["specifier", "builder"], "taxonomy": "org", "max_levels": 2 },
+      "severity": "warning"
+    },
+    {
+      "slug": "requires_product_classification",
+      "name": "Product classification required",
+      "predicate": "requires_classification",
+      "args": { "taxonomy": "product" },
+      "severity": "warning"
+    }
+  ],
+  "taxonomies": [
+    { "slug": "org", "name": "Organization", "description": "Org chart used by the pilot_independence constraint.", "levels": ["org", "node", "team"], "nodes": [] },
+    { "slug": "product", "name": "Product", "description": "Product tree milestones are classified into; required by requires_product_classification.", "levels": ["product_group", "product", "node", "features"], "nodes": [] },
+    { "slug": "goals", "name": "Goals", "description": "Goal tree (goal → node → result) milestones align to.", "levels": ["goal", "node", "result"], "nodes": [] }
+  ]
+}
