@@ -77,6 +77,11 @@ func (s *Store) migrate() error {
 	s.addColumnIfNotExists("work_items", "classifications_json", "TEXT")
 	s.addColumnIfNotExists("work_items", "role_bindings_json", "TEXT")
 
+	// Generic projection state (work.field_set / work.schedule_set), stored as
+	// JSON blobs on the row for the same reasons as the collections above.
+	s.addColumnIfNotExists("work_items", "fields_json", "TEXT")
+	s.addColumnIfNotExists("work_items", "stages_json", "TEXT")
+
 	return nil
 }
 
@@ -537,9 +542,11 @@ func (s *Store) UpsertWorkItem(ctx context.Context, wi *domain.WorkItem) error {
 	acksJSON := marshalJSONColumn(wi.Acks)
 	classificationsJSON := marshalJSONColumn(wi.Classifications)
 	roleBindingsJSON := marshalJSONColumn(wi.RoleBindings)
+	fieldsJSON := marshalFieldsColumn(wi.Fields)
+	stagesJSON := marshalJSONColumn(wi.Stages)
 	if _, err := tx.ExecContext(ctx,
-		`UPDATE work_items SET acks_json = ?, classifications_json = ?, role_bindings_json = ? WHERE id = ?`,
-		acksJSON, classificationsJSON, roleBindingsJSON, wi.ID,
+		`UPDATE work_items SET acks_json = ?, classifications_json = ?, role_bindings_json = ?, fields_json = ?, stages_json = ? WHERE id = ?`,
+		acksJSON, classificationsJSON, roleBindingsJSON, fieldsJSON, stagesJSON, wi.ID,
 	); err != nil {
 		return err
 	}
@@ -553,6 +560,19 @@ func marshalJSONColumn(v any) string {
 	data, err := json.Marshal(v)
 	if err != nil {
 		return "[]"
+	}
+	return string(data)
+}
+
+// marshalFieldsColumn marshals the Fields map, returning "{}" on nil/empty or
+// any marshal error so reads round-trip to an empty map.
+func marshalFieldsColumn(v map[string]string) string {
+	if len(v) == 0 {
+		return "{}"
+	}
+	data, err := json.Marshal(v)
+	if err != nil {
+		return "{}"
 	}
 	return string(data)
 }
@@ -1177,14 +1197,17 @@ func (s *Store) loadWorkItemCollections(ctx context.Context, wi *domain.WorkItem
 		wi.Outcomes = append(wi.Outcomes, oc)
 	}
 
-	// RE substrate / ACK collections, read from the JSON columns on the row.
+	// RE substrate / ACK collections + generic projection state, read from the
+	// JSON columns on the row.
 	wi.Acks = []domain.Ack{}
 	wi.Classifications = []domain.Classification{}
 	wi.RoleBindings = []domain.RoleBinding{}
-	var acksJSON, classificationsJSON, roleBindingsJSON sql.NullString
+	wi.Fields = map[string]string{}
+	wi.Stages = []domain.Stage{}
+	var acksJSON, classificationsJSON, roleBindingsJSON, fieldsJSON, stagesJSON sql.NullString
 	if err := s.db.QueryRowContext(ctx,
-		`SELECT acks_json, classifications_json, role_bindings_json FROM work_items WHERE id = ?`, wi.ID,
-	).Scan(&acksJSON, &classificationsJSON, &roleBindingsJSON); err != nil && err != sql.ErrNoRows {
+		`SELECT acks_json, classifications_json, role_bindings_json, fields_json, stages_json FROM work_items WHERE id = ?`, wi.ID,
+	).Scan(&acksJSON, &classificationsJSON, &roleBindingsJSON, &fieldsJSON, &stagesJSON); err != nil && err != sql.ErrNoRows {
 		return err
 	}
 	if acksJSON.Valid && acksJSON.String != "" {
@@ -1195,6 +1218,12 @@ func (s *Store) loadWorkItemCollections(ctx context.Context, wi *domain.WorkItem
 	}
 	if roleBindingsJSON.Valid && roleBindingsJSON.String != "" {
 		_ = json.Unmarshal([]byte(roleBindingsJSON.String), &wi.RoleBindings)
+	}
+	if fieldsJSON.Valid && fieldsJSON.String != "" {
+		_ = json.Unmarshal([]byte(fieldsJSON.String), &wi.Fields)
+	}
+	if stagesJSON.Valid && stagesJSON.String != "" {
+		_ = json.Unmarshal([]byte(stagesJSON.String), &wi.Stages)
 	}
 
 	return nil

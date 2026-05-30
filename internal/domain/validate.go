@@ -128,6 +128,22 @@ func ValidateEvent(e Event, meta *MetaConfig) error {
 		if !IsValidAmendmentType(p.AmendmentType) {
 			return fmt.Errorf("invalid amendment type %q", p.AmendmentType)
 		}
+
+	case EventWorkFieldSet:
+		var p FieldSetPayload
+		if err := json.Unmarshal(e.Payload, &p); err != nil {
+			return err
+		}
+		if p.Field == "" {
+			return fmt.Errorf("field is required")
+		}
+
+	case EventWorkScheduleSet:
+		// Generic, methodology-agnostic: any ordered list of stages is valid.
+		var p ScheduleSetPayload
+		if err := json.Unmarshal(e.Payload, &p); err != nil {
+			return err
+		}
 	}
 
 	return nil

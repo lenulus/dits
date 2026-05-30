@@ -463,6 +463,24 @@ func (m *MetaConfig) MoveTaxonomyNode(taxSlug, slug, newParentSlug string) error
 	return fmt.Errorf("node %q not found in taxonomy %q", slug, taxSlug)
 }
 
+// SetTaxonomyNodeMetadata replaces a node's opaque Metadata blob. DITS attaches
+// no meaning to it — a consuming methodology stores e.g. {result, resultNote}
+// for a goals node there. Bumps Version.
+func (m *MetaConfig) SetTaxonomyNodeMetadata(taxSlug, slug string, metadata json.RawMessage) error {
+	tx := m.GetTaxonomy(taxSlug)
+	if tx == nil {
+		return fmt.Errorf("taxonomy %q not found", taxSlug)
+	}
+	for i := range tx.Nodes {
+		if tx.Nodes[i].Slug == slug {
+			tx.Nodes[i].Metadata = metadata
+			m.Version++
+			return nil
+		}
+	}
+	return fmt.Errorf("node %q not found in taxonomy %q", slug, taxSlug)
+}
+
 // RetireTaxonomyNode marks a node retired so it can no longer be the target of
 // new classifications (existing classifications and declassify still resolve).
 // Bumps Version.

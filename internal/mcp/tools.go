@@ -624,15 +624,27 @@ func registerTools(s *server.MCPServer, cfg Config) {
 	}))
 
 	s.AddTool(mcp.NewTool("dits_work_observe",
-		mcp.WithDescription("Record an investigation observation."),
+		mcp.WithDescription("Record an investigation observation. An optional opaque JSON data blob rides alongside (methodology-agnostic: a consumer uses it for a typed discriminator)."),
 		mcp.WithString("id", mcp.Required()),
 		mcp.WithString("summary", mcp.Required()),
+		mcp.WithString("data", mcp.Description(`Optional opaque JSON blob, e.g. {"entry_type":"risk","severity":"high"}.`)),
 	), withOps(cfg, func(ctx context.Context, w *workops.WorkOps, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		id, errR, _ := resolveID(ctx, w, req)
 		if errR != nil {
 			return errR, nil
 		}
-		wi, err := w.Observe(ctx, id, req.GetString("summary", ""))
+		var (
+			wi  *domain.WorkItem
+			err error
+		)
+		if raw := strings.TrimSpace(req.GetString("data", "")); raw != "" {
+			if !json.Valid([]byte(raw)) {
+				return errResult(fmt.Errorf("data: not valid JSON"))
+			}
+			wi, err = w.ObserveData(ctx, id, req.GetString("summary", ""), json.RawMessage(raw))
+		} else {
+			wi, err = w.Observe(ctx, id, req.GetString("summary", ""))
+		}
 		if err != nil {
 			return errResult(err)
 		}
@@ -820,6 +832,27 @@ func registerTools(s *server.MCPServer, cfg Config) {
 		return jsonResult(wi)
 	}))
 
+	s.AddTool(mcp.NewTool("dits_work_unlink",
+		mcp.WithDescription("Remove a relation (depends_on, relates_to, etc.) between work items."),
+		mcp.WithString("id", mcp.Required()),
+		mcp.WithString("type", mcp.Required()),
+		mcp.WithString("target", mcp.Required(), mcp.Description("Target work item ID or shared ID")),
+	), withOps(cfg, func(ctx context.Context, w *workops.WorkOps, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		id, errR, _ := resolveID(ctx, w, req)
+		if errR != nil {
+			return errR, nil
+		}
+		target, err := w.ResolveWorkItem(ctx, req.GetString("target", ""))
+		if err != nil {
+			return errResult(fmt.Errorf("target: %w", err))
+		}
+		wi, err := w.Unlink(ctx, id, req.GetString("type", ""), target.ID)
+		if err != nil {
+			return errResult(err)
+		}
+		return jsonResult(wi)
+	}))
+
 	s.AddTool(mcp.NewTool("dits_work_status",
 		mcp.WithDescription("Set the status of a work item."),
 		mcp.WithString("id", mcp.Required()),
@@ -1000,6 +1033,48 @@ func registerTools(s *server.MCPServer, cfg Config) {
 		return jsonResult(wi)
 	}))
 
+	// ---------- Generic projection (methodology-agnostic) ----------
+
+	s.AddTool(mcp.NewTool("dits_work_field_set",
+		mcp.WithDescription("Set an opaque scalar projection field on a work item (latest write per field wins). Methodology-agnostic: DITS attaches no meaning to field or value — a consuming methodology decides what e.g. ryg / target / customer_visible mean."),
+		mcp.WithString("id", mcp.Required()),
+		mcp.WithString("field", mcp.Required(), mcp.Description("Opaque projection field name, e.g. ryg / target / target_precision / customer_visible")),
+		mcp.WithString("value", mcp.Description("Opaque scalar value")),
+	), withOps(cfg, func(ctx context.Context, w *workops.WorkOps, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		id, errR, _ := resolveID(ctx, w, req)
+		if errR != nil {
+			return errR, nil
+		}
+		wi, err := w.FieldSet(ctx, id, req.GetString("field", ""), req.GetString("value", ""))
+		if err != nil {
+			return errResult(err)
+		}
+		return jsonResult(wi)
+	}))
+
+	s.AddTool(mcp.NewTool("dits_work_schedule_set",
+		mcp.WithDescription("Replace a work item's staged delivery timeline wholesale (latest write wins). Methodology-agnostic: stage keys/states/precisions are opaque to DITS."),
+		mcp.WithString("id", mcp.Required()),
+		mcp.WithString("stages_json", mcp.Required(), mcp.Description(`JSON array of stages: [{"key":"beta","label":"Beta","date":"2026 Q3","precision":"Q","state":"open"}]. Empty array clears the schedule.`)),
+	), withOps(cfg, func(ctx context.Context, w *workops.WorkOps, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		id, errR, _ := resolveID(ctx, w, req)
+		if errR != nil {
+			return errR, nil
+		}
+		var stages []domain.ScheduleStage
+		raw := req.GetString("stages_json", "")
+		if strings.TrimSpace(raw) != "" {
+			if err := json.Unmarshal([]byte(raw), &stages); err != nil {
+				return errResult(fmt.Errorf("stages_json: %w", err))
+			}
+		}
+		wi, err := w.ScheduleSet(ctx, id, stages)
+		if err != nil {
+			return errResult(err)
+		}
+		return jsonResult(wi)
+	}))
+
 	// ---------- ACK lifecycle ----------
 
 	s.AddTool(mcp.NewTool("dits_ack_file",
@@ -1138,13 +1213,37 @@ func registerTools(s *server.MCPServer, cfg Config) {
 		mcp.WithString("slug", mcp.Required()),
 		mcp.WithString("name", mcp.Required()),
 		mcp.WithString("parent_slug"),
+		mcp.WithString("metadata", mcp.Description("Optional opaque JSON metadata blob stored on the node, e.g. {\"result\":\"achieved\",\"resultNote\":\"...\"} for a goals node.")),
 	), withOps(cfg, func(ctx context.Context, w *workops.WorkOps, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		var metadata json.RawMessage
+		if raw := strings.TrimSpace(req.GetString("metadata", "")); raw != "" {
+			if !json.Valid([]byte(raw)) {
+				return errResult(fmt.Errorf("metadata: not valid JSON"))
+			}
+			metadata = json.RawMessage(raw)
+		}
 		return applyMetaMutation(ctx, w, func(m *domain.MetaConfig) error {
 			return m.AddTaxonomyNode(req.GetString("taxonomy", ""), domain.TaxonomyNode{
 				Slug:       req.GetString("slug", ""),
 				Name:       req.GetString("name", ""),
 				ParentSlug: req.GetString("parent_slug", ""),
+				Metadata:   metadata,
 			})
+		})
+	}))
+
+	s.AddTool(mcp.NewTool("dits_taxonomy_node_set",
+		mcp.WithDescription("Set the opaque JSON metadata blob on an existing taxonomy node (bumps meta version). Methodology-agnostic: DITS attaches no meaning to it — a methodology stores e.g. {result, resultNote} for a goals node there."),
+		mcp.WithString("taxonomy", mcp.Required()),
+		mcp.WithString("slug", mcp.Required()),
+		mcp.WithString("metadata", mcp.Required(), mcp.Description("Opaque JSON metadata blob, e.g. {\"result\":\"achieved\",\"resultNote\":\"1 incident\"}.")),
+	), withOps(cfg, func(ctx context.Context, w *workops.WorkOps, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		raw := strings.TrimSpace(req.GetString("metadata", ""))
+		if raw == "" || !json.Valid([]byte(raw)) {
+			return errResult(fmt.Errorf("metadata: not valid JSON"))
+		}
+		return applyMetaMutation(ctx, w, func(m *domain.MetaConfig) error {
+			return m.SetTaxonomyNodeMetadata(req.GetString("taxonomy", ""), req.GetString("slug", ""), json.RawMessage(raw))
 		})
 	}))
 

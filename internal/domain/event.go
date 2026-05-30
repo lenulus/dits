@@ -134,6 +134,19 @@ const (
 	EventWorkAckAmended  EventType = "work.ack_amended"
 )
 
+// --- Generic projection events ---
+//
+// These two events let a consuming methodology ride scalar and staged-timeline
+// projection state on the substrate without DITS modelling any of it. They are
+// methodology-agnostic: field_set carries an opaque key/value, schedule_set an
+// opaque ordered list of stages. The reducer projects them onto WorkItem
+// (Fields, Stages); no field name or stage key is special-cased in DITS.
+
+const (
+	EventWorkFieldSet    EventType = "work.field_set"
+	EventWorkScheduleSet EventType = "work.schedule_set"
+)
+
 // Event is an immutable record of a state change in the system.
 type Event struct {
 	ID             EventID         `json:"id"`
@@ -464,6 +477,33 @@ type AckAmendedPayload struct {
 	AmendmentType string   `json:"amendment_type"`
 	Fields        []string `json:"fields,omitempty"`
 	Reason        string   `json:"reason,omitempty"`
+}
+
+// --- Generic Projection Payloads ---
+
+// FieldSetPayload carries a single opaque scalar projection field. The reducer
+// stores it in WorkItem.Fields under Field (latest write wins). DITS attaches
+// no meaning to Field or Value — a consuming methodology decides what e.g.
+// "ryg" or "target_precision" mean.
+type FieldSetPayload struct {
+	Field string `json:"field"`
+	Value string `json:"value"`
+}
+
+// ScheduleStage is one entry in a staged delivery timeline. All fields are
+// opaque to DITS; a methodology interprets Key/State/Precision.
+type ScheduleStage struct {
+	Key       string `json:"key"`
+	Label     string `json:"label"`
+	Date      string `json:"date"`      // free-form: "2026 Q3" | "2026-09-30" | "Sept 2026"
+	Precision string `json:"precision"` // free-form, e.g. Q | M | D
+	State     string `json:"state"`     // free-form, e.g. done | soon | open
+}
+
+// ScheduleSetPayload replaces a work item's staged timeline wholesale (latest
+// write wins). An empty Stages clears the schedule.
+type ScheduleSetPayload struct {
+	Stages []ScheduleStage `json:"stages"`
 }
 
 // MustMarshalPayload marshals a payload to JSON, panicking on error.

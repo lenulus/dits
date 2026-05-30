@@ -481,6 +481,21 @@ func (w *WorkOps) Unlink(ctx context.Context, id domain.WorkItemID, relationType
 	return w.simpleEvent(ctx, id, domain.EventWorkUnlinked, domain.RelationPayload{RelationType: relationType, TargetWorkItem: target}, false)
 }
 
+// FieldSet writes a single opaque scalar projection field (latest write per key
+// wins). Methodology-agnostic: DITS attaches no meaning to field or value.
+func (w *WorkOps) FieldSet(ctx context.Context, id domain.WorkItemID, field, value string) (*domain.WorkItem, error) {
+	if field == "" {
+		return nil, fmt.Errorf("field is required")
+	}
+	return w.simpleEvent(ctx, id, domain.EventWorkFieldSet, domain.FieldSetPayload{Field: field, Value: value}, false)
+}
+
+// ScheduleSet replaces a work item's staged timeline wholesale (latest write
+// wins). Methodology-agnostic: stage keys/states/precisions are opaque to DITS.
+func (w *WorkOps) ScheduleSet(ctx context.Context, id domain.WorkItemID, stages []domain.ScheduleStage) (*domain.WorkItem, error) {
+	return w.simpleEvent(ctx, id, domain.EventWorkScheduleSet, domain.ScheduleSetPayload{Stages: stages}, false)
+}
+
 // Classify places a work item within a taxonomy node. withMeta=true so the
 // taxonomy/node references are validated against the current meta.
 func (w *WorkOps) Classify(ctx context.Context, id domain.WorkItemID, taxonomySlug, nodeSlug string) (*domain.WorkItem, error) {
@@ -803,6 +818,13 @@ func (w *WorkOps) Unblock(ctx context.Context, id domain.WorkItemID, reason stri
 
 func (w *WorkOps) Observe(ctx context.Context, id domain.WorkItemID, summary string) (*domain.WorkItem, error) {
 	return w.simpleEvent(ctx, id, domain.EventWorkObservationRecorded, domain.ObservationRecordedPayload{Summary: summary}, false)
+}
+
+// ObserveData records an observation carrying an opaque structured Data blob
+// alongside the summary. DITS attaches no meaning to Data — a methodology uses
+// it for a typed discriminator (e.g. RE's {entry_type:"status"|"risk"|"next"}).
+func (w *WorkOps) ObserveData(ctx context.Context, id domain.WorkItemID, summary string, data json.RawMessage) (*domain.WorkItem, error) {
+	return w.simpleEvent(ctx, id, domain.EventWorkObservationRecorded, domain.ObservationRecordedPayload{Summary: summary, Data: data}, false)
 }
 
 func (w *WorkOps) Finding(ctx context.Context, id domain.WorkItemID, statement string, confidence float64) (*domain.WorkItem, error) {

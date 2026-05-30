@@ -41,6 +41,9 @@ func Reduce(events []Event) (*WorkItem, error) {
 		RoleBindings:    []RoleBinding{},
 		Diagnostics:     []Diagnostic{},
 		Acks:            []Ack{},
+
+		Fields: map[string]string{},
+		Stages: []Stage{},
 	}
 
 	for _, e := range events {
@@ -677,6 +680,31 @@ func ApplyEvent(wi *WorkItem, e Event) error {
 				Timestamp: e.Timestamp,
 			})
 		}
+		wi.UpdatedAt = maxTime(wi.UpdatedAt, e.Timestamp)
+
+	// --- Generic projection ---
+
+	case EventWorkFieldSet:
+		var p FieldSetPayload
+		if err := json.Unmarshal(e.Payload, &p); err != nil {
+			return err
+		}
+		if wi.Fields == nil {
+			wi.Fields = map[string]string{}
+		}
+		wi.Fields[p.Field] = p.Value
+		wi.UpdatedAt = maxTime(wi.UpdatedAt, e.Timestamp)
+
+	case EventWorkScheduleSet:
+		var p ScheduleSetPayload
+		if err := json.Unmarshal(e.Payload, &p); err != nil {
+			return err
+		}
+		stages := make([]Stage, len(p.Stages))
+		for i, s := range p.Stages {
+			stages[i] = Stage{Key: s.Key, Label: s.Label, Date: s.Date, Precision: s.Precision, State: s.State}
+		}
+		wi.Stages = stages
 		wi.UpdatedAt = maxTime(wi.UpdatedAt, e.Timestamp)
 	}
 

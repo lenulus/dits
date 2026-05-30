@@ -76,8 +76,27 @@ type WorkItem struct {
 	// amend apply to the most recently filed one.
 	Acks []Ack
 
+	// Generic projection state (methodology-agnostic). Fields holds scalar
+	// key/value projection set via work.field_set (latest write per key wins);
+	// Stages holds the staged timeline set via work.schedule_set (replaced
+	// wholesale). DITS attaches no meaning to keys, values, or stage fields —
+	// a consuming methodology (e.g. RE: ryg, target, customer_visible, the
+	// Dogfood/Beta/GA timeline) interprets them.
+	Fields map[string]string
+	Stages []Stage
+
 	EventCount int
 	HeadEvents []EventID
+}
+
+// Stage is one materialized entry of a work item's staged delivery timeline.
+// All fields are opaque to DITS.
+type Stage struct {
+	Key       string
+	Label     string
+	Date      string
+	Precision string
+	State     string
 }
 
 // Ack is a materialized two-party commitment: the filed scope/timing/outcome
