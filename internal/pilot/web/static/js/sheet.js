@@ -1,22 +1,32 @@
-/* sheet.js — keyboard + selection island for the Sheet primitive.
+/* sheet.js — keyboard + selection + interactivity island for the Sheet.
  *
- * Port of the interaction layer in app/sheet.jsx (§9.3). The server renders
- * a correct, static .sht table (frozen columns, pinned width); this script
- * adds the ergonomics on top:
+ * Port of the interaction layer in app/sheet.jsx (§9.3). The server renders a
+ * correct, static .sht table (frozen columns, pinned width) plus the toolbar /
+ * filter chips / bulk bar; this script adds the ergonomics and HTMX glue:
  *   Arrows      move the focused cell
  *   Tab / ⇧Tab  move horizontally
- *   Enter       edit the focused cell (TODO phase 5: inline editors)
+ *   Enter       open the inline editor of the focused cell (HTMX hx-get swap)
  *   ⌘/Ctrl+Enter open the record panel for the focused row
  *   Space       toggle row selection
- *   Esc         cancel edit / clear selection
- * Click on a row's nav cell opens the panel; the gutter checkboxes select.
- *
- * Foundation: navigation, selection highlighting, panel-open via location,
- * and column-group band toggle (?group= query param) are wired. Inline cell
- * editing and live mutation land with the MCP data step.
+ *   Esc         cancel an open editor / clear selection
+ * Click on an editable cell opens its editor; click on a nav cell opens the
+ * panel; gutter checkboxes select and raise the bulk-action bar. The toolbar
+ * Pivots (preset / group-by) and filter chips navigate the view URL with query
+ * params (?preset / ?groupby / ?flt_<field>=<value>); the quick-add row + the
+ * toolbar +New button POST to /partials/sheet/add via a hidden form.
  */
 (function () {
   "use strict";
+
+  /* ---- editable-cell helpers (HTMX does the actual fetch/swap) ---- */
+  function openEditor(cell) {
+    if (!cell || !cell.hasAttribute("data-editable")) return;
+    if (cell.querySelector(".is-editing")) return; // already editing
+    // The cell carries hx-get + hx-trigger="edit"; fire it.
+    if (window.htmx) {
+      window.htmx.trigger(cell, "edit");
+    }
+  }
 
   function initSheet(wrap) {
     var navCol = parseInt(wrap.getAttribute("data-nav-col") || "1", 10);
@@ -45,14 +55,21 @@
     function openRow(tr) {
       var id = tr && tr.getAttribute("data-row-id");
       if (!id) return;
-      // Foundation: navigate with ?open=<id> so the server can render the
-      // panel open. (Phase 5: HTMX swap the panel in place instead.)
       var u = new URL(window.location.href);
       u.searchParams.set("open", id);
       window.location.assign(u.toString());
     }
 
     wrap.addEventListener("keydown", function (e) {
+      // While an inline editor is open, let it own the keystrokes (Esc cancels).
+      var editing = wrap.querySelector(".sht-cell .is-editing, .sht-cell.is-editing");
+      if (editing) {
+        if (e.key === "Escape") {
+          e.preventDefault();
+          cancelEditors();
+        }
+        return;
+      }
       var rs = rows();
       var max = rs.length - 1;
       var mc = maxCol();
@@ -68,7 +85,7 @@
       else if (e.key === "Enter") {
         e.preventDefault();
         if (e.metaKey || e.ctrlKey) { openRow(rs[focus.r]); return; }
-        // TODO(phase 5): begin inline edit of the focused cell.
+        openEditor(cellAt(focus.r, focus.c));
       }
       else if (e.key === " ") {
         e.preventDefault();
@@ -80,19 +97,59 @@
       }
     });
 
-    // Click a nav cell → open the panel.
-    wrap.querySelectorAll("[data-nav-cell]").forEach(function (cell) {
-      cell.addEventListener("click", function () {
-        var tr = cell.closest("tr[data-row-id]");
-        openRow(tr);
+    function cancelEditors() {
+      // Restore the cell to its display value by re-issuing the row (cheapest
+      // path: reload the editor's host cell from the server is overkill, so we
+      // just remove the editor form; the next swap/refresh repaints it).
+      wrap.querySelectorAll("[data-editable] form.is-editing").forEach(function (f) {
+        var cell = f.closest("[data-editable]");
+        f.remove();
+        if (cell && !cell.textContent.trim()) {
+          cell.innerHTML = '<span class="placeholder">—</span>';
+        }
       });
+      wrap.focus();
+    }
+
+    // Click an editable cell → open its editor. Click a nav cell → open panel.
+    wrap.addEventListener("click", function (e) {
+      var nav = e.target.closest("[data-nav-cell]");
+      var editable = e.target.closest("[data-editable]");
+      if (nav && !editable) {
+        openRow(nav.closest("tr[data-row-id]"));
+        return;
+      }
+      if (editable) {
+        var tr = editable.closest("tr[data-row-id]");
+        if (tr) {
+          focus.r = rows().indexOf(tr);
+          var cells = tr.querySelectorAll(".sht-cell");
+          focus.c = Array.prototype.indexOf.call(cells, editable);
+          paint();
+        }
+        openEditor(editable);
+      }
     });
 
-    // Row selection via gutter checkboxes.
+    /* ---- row selection + bulk bar ---- */
+    function selectedIds() {
+      return Array.prototype.filter
+        .call(wrap.querySelectorAll("[data-select-row]"), function (b) { return b.checked; })
+        .map(function (b) { return b.getAttribute("data-select-row"); });
+    }
+    function syncBulkBar() {
+      var bar = document.querySelector("[data-bulkbar]");
+      if (!bar) return;
+      var ids = selectedIds();
+      var cnt = bar.querySelector("[data-bulk-count]");
+      if (cnt) cnt.textContent = String(ids.length);
+      bar.hidden = ids.length === 0;
+    }
     function syncRowSel(box) {
       var tr = box.closest("tr");
       if (tr) tr.classList.toggle("is-selected", box.checked);
       syncSelectAll();
+      syncBulkBar();
     }
     wrap.querySelectorAll("[data-select-row]").forEach(function (box) {
       box.addEventListener("change", function () { syncRowSel(box); });
@@ -117,25 +174,168 @@
         b.checked = false; b.closest("tr").classList.remove("is-selected");
       });
       syncSelectAll();
+      syncBulkBar();
     }
 
+    // Quick-add row → POST to /partials/sheet/add with the view kind.
+    var addKind = wrap.getAttribute("data-add-kind");
+    wrap.querySelectorAll("[data-add-row]").forEach(function (row) {
+      row.addEventListener("click", function () { quickAdd(addKind); });
+    });
+
     // Column-group band toggle: navigate with ?group=<key> so the server
-    // recomputes the collapsed set. (Phase 5: do this client-side / HTMX.)
+    // recomputes the collapsed set.
     wrap.querySelectorAll("[data-band-toggle]").forEach(function (band) {
       band.addEventListener("click", function () {
         var key = band.getAttribute("data-group");
         if (!key) return;
-        var u = new URL(window.location.href);
-        u.searchParams.set("group", key);
-        window.location.assign(u.toString());
+        navWith({ group: key });
       });
     });
 
     paint();
   }
 
+  /* ---- toolbar: preset / group-by Pivots + filter chips ---- */
+  function navWith(params) {
+    var u = new URL(window.location.href);
+    Object.keys(params).forEach(function (k) {
+      if (params[k] === null) u.searchParams.delete(k);
+      else u.searchParams.set(k, params[k]);
+    });
+    window.location.assign(u.toString());
+  }
+
+  function initToolbar(tb) {
+    tb.querySelectorAll("[data-preset]").forEach(function (b) {
+      b.addEventListener("click", function () { navWith({ preset: b.getAttribute("data-preset") }); });
+    });
+    tb.querySelectorAll("[data-groupby]").forEach(function (b) {
+      b.addEventListener("click", function () { navWith({ groupby: b.getAttribute("data-groupby") }); });
+    });
+    // Remove a filter chip → drop its query param.
+    tb.querySelectorAll("[data-chip-remove]").forEach(function (x) {
+      x.addEventListener("click", function () {
+        var p = {}; p["flt_" + x.getAttribute("data-chip-remove")] = null;
+        navWith(p);
+      });
+    });
+    var clearAll = tb.querySelector("[data-filter-clear]");
+    if (clearAll) {
+      clearAll.addEventListener("click", function () {
+        var u = new URL(window.location.href);
+        Array.prototype.slice.call(u.searchParams.keys())
+          .filter(function (k) { return k.indexOf("flt_") === 0; })
+          .forEach(function (k) { u.searchParams.delete(k); });
+        window.location.assign(u.toString());
+      });
+    }
+    // +Add filter: two-step popover (field → value).
+    var addWrap = tb.querySelector("[data-filter-add]");
+    if (addWrap) {
+      var pop = addWrap.querySelector("[data-filter-pop]");
+      var valuesTpl = tb.querySelector("[data-filter-values]");
+      addWrap.querySelector(".flt-add").addEventListener("click", function () {
+        if (pop) pop.hidden = !pop.hidden;
+      });
+      if (pop) {
+        pop.querySelectorAll(".flt-pop__opt[data-field]").forEach(function (opt) {
+          opt.addEventListener("click", function () {
+            var field = opt.getAttribute("data-field");
+            var kind = opt.getAttribute("data-kind");
+            if (kind === "bool") { var p = {}; p["flt_" + field] = "true"; navWith(p); return; }
+            showValueStep(pop, valuesTpl, field);
+          });
+        });
+      }
+    }
+  }
+
+  function showValueStep(pop, valuesTpl, field) {
+    pop.innerHTML = '<span class="flt-pop__head"><span class="flt-pop__back">←</span> ' + field + "</span>";
+    pop.querySelector(".flt-pop__back").addEventListener("click", function () {
+      window.location.reload(); // simplest reset back to the field list
+    });
+    var src = valuesTpl && valuesTpl.content
+      ? valuesTpl.content.querySelector('[data-field-values="' + field + '"]') : null;
+    if (src) {
+      src.querySelectorAll(".flt-pop__opt[data-value]").forEach(function (vo) {
+        var clone = vo.cloneNode(true);
+        clone.addEventListener("click", function () {
+          var p = {}; p["flt_" + field] = vo.getAttribute("data-value"); navWith(p);
+        });
+        pop.appendChild(clone);
+      });
+    }
+  }
+
+  /* ---- bulk-action bar ---- */
+  function initBulkBar(bar) {
+    function ids() {
+      return Array.prototype.filter
+        .call(document.querySelectorAll("[data-select-row]"), function (b) { return b.checked; })
+        .map(function (b) { return b.getAttribute("data-select-row"); });
+    }
+    bar.querySelectorAll("[data-bulk-action]").forEach(function (b) {
+      b.addEventListener("click", function () {
+        var action = b.getAttribute("data-bulk-action");
+        var value = "";
+        if (action === "reassign") value = window.prompt("Reassign pilot to actor id:") || "";
+        else if (action === "quarter") value = window.prompt("Set quarter (e.g. 2026 Q3):") || "";
+        else if (action === "classify") value = window.prompt("Classify into product node slug:") || "";
+        if ((action === "reassign" || action === "quarter" || action === "classify") && !value) return;
+        postBulk(action, value, ids());
+      });
+    });
+    var clear = bar.querySelector("[data-bulk-clear]");
+    if (clear) {
+      clear.addEventListener("click", function () {
+        document.querySelectorAll("[data-select-row]").forEach(function (b) {
+          b.checked = false;
+          var tr = b.closest("tr"); if (tr) tr.classList.remove("is-selected");
+        });
+        bar.hidden = true;
+        var cnt = bar.querySelector("[data-bulk-count]"); if (cnt) cnt.textContent = "0";
+      });
+    }
+  }
+
+  function postBulk(action, value, ids) {
+    var bar = document.querySelector("[data-sheet][data-bulk-url]") || document.querySelector("[data-bulk-url]");
+    var url = bar ? bar.getAttribute("data-bulk-url") : "/partials/sheet/bulk";
+    var body = new URLSearchParams();
+    body.set("action", action);
+    body.set("value", value);
+    ids.forEach(function (id) { body.append("ids", id); });
+    fetch(url, { method: "POST", headers: { "HX-Request": "true" }, body: body })
+      .then(function (res) {
+        if (res.headers.get("HX-Refresh") === "true" || res.ok) window.location.reload();
+      });
+  }
+
+  /* ---- quick-add (+New) ---- */
+  function quickAdd(kind) {
+    if (!kind) return;
+    var body = new URLSearchParams();
+    body.set("kind", kind);
+    fetch("/partials/sheet/add", { method: "POST", headers: { "HX-Request": "true" }, body: body })
+      .then(function (res) {
+        var dest = res.headers.get("HX-Redirect");
+        if (dest) window.location.assign(dest);
+        else if (res.ok) window.location.reload();
+      });
+  }
+
   function init() {
     document.querySelectorAll("[data-sheet]").forEach(initSheet);
+    document.querySelectorAll("[data-toolbar]").forEach(initToolbar);
+    document.querySelectorAll("[data-bulkbar]").forEach(initBulkBar);
+    // Toolbar +New button (mirrors the quick-add row).
+    document.querySelectorAll(".sht-toolbar [data-add-row]").forEach(function (b) {
+      var sheet = document.querySelector("[data-sheet][data-add-kind]");
+      var kind = sheet ? sheet.getAttribute("data-add-kind") : null;
+      b.addEventListener("click", function () { quickAdd(kind); });
+    });
   }
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", init);

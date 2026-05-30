@@ -8,7 +8,7 @@ package web
 import "html/template"
 
 // Column describes one sheet column. Mirrors sheet.jsx's column shape
-// (key,label,width,frozen,group,align,num,readonly).
+// (key,label,width,frozen,group,align,num,readonly,edit,options).
 type Column struct {
 	Key      string // row-map key this column reads
 	Label    string // header label
@@ -18,6 +18,18 @@ type Column struct {
 	Align    string // "", "right"
 	Num      bool   // monospace tabular-nums, right-aligned
 	Readonly bool   // not inline-editable
+
+	// Inline-edit descriptor (Track B). Edit names the editor kind sheet.html
+	// emits hx-* attributes for; "" means the cell is not inline-editable even
+	// when !Readonly. Options supplies the choices for a "select" editor.
+	Edit    string   // "select" | "actor" | "taxonomy" | "target" | "ack" | "text"
+	Options []Option // for Edit == "select"
+}
+
+// Option is one choice in a select editor (value sent on commit, label shown).
+type Option struct {
+	Value string
+	Label string
 }
 
 // ColumnGroup is a collapsible band over a run of columns (§9.3 column
@@ -62,16 +74,65 @@ type SheetModel struct {
 	Groups       []ColumnGroup
 	Presets      []Preset
 	Collapsed    map[string]bool // group key → collapsed
-	GroupBy      string          // "", "status", "orgNode", ...
+	GroupBy      string          // "", "status", "team", "product", "quarter"
 	Selectable   bool            // render the multi-select gutter
 	AddLabel     string          // quick-add row label ("" → no add row)
 	ActiveID     string          // row currently open in the panel (is-active)
 	NavColumnIdx int             // which display-column index opens the panel on click
 
+	// Track B interactive chrome. Toolbar (when non-nil) renders the
+	// preset/group-by/filter toolbar above the grid; the partial endpoints
+	// drive these via query params. AddKind / AddURL wire the quick-add row to
+	// WorkCreate. BulkURL is the bulk-action endpoint the selection bar posts to.
+	Toolbar *Toolbar
+	Groups2 []RowGroup // pre-grouped rows for GroupBy != "" (row banding)
+	AddKind string     // work kind the quick-add row creates ("" → inert add row)
+	BulkURL string     // /partials/sheet/bulk endpoint ("" → no bulk bar)
+
 	// Computed by ComputeLayout — do not set directly.
 	TotalWidth  int
 	frozenLeft  map[string]int // column key → sticky left px
 	displayCols []displayCol
+}
+
+// Toolbar is the Portfolio toolbar view-model (preset Pivot, group-by Pivot,
+// filter chips, +Add-filter popover, count, +New action). Driven by the query
+// params the partial endpoints round-trip. Mirrors App.jsx PortfolioToolbar.
+type Toolbar struct {
+	BaseURL      string        // the view's path, e.g. "/portfolio" (chips/group links target it)
+	Preset       string        // active preset value
+	Presets      []Preset      // preset Pivot options
+	GroupBy      string        // active group-by key
+	GroupByOpts  []Option      // group-by Pivot options
+	Filters      []FilterPill  // active filter chips
+	FilterFields []FilterField // the +Add-filter field menu (two-step popover)
+	Total        int           // total-count badge
+	AddLabel     string        // "+New …" action label ("" → no action button)
+}
+
+// FilterPill is one active filter chip (label · op · value), removable/editable.
+type FilterPill struct {
+	Field    string // filter field key
+	Label    string // human field label
+	Op       string // "is" (only op today)
+	Value    string // raw value
+	ValueLab string // display value
+}
+
+// FilterField is one entry in the +Add-filter field menu. Bool fields commit
+// immediately; enum/actor fields open a value list (Options / actor picker).
+type FilterField struct {
+	Field   string   // query-param key
+	Label   string   // menu label
+	Kind    string   // "enum" | "actor" | "bool"
+	Options []Option // value list for "enum"
+}
+
+// RowGroup is a contiguous band of rows under a group header (Track B group-by).
+type RowGroup struct {
+	Key   string // group header label
+	Rows  []Row
+	Count int
 }
 
 // DefaultColWidth matches sheet.jsx's fallback (140px).
@@ -93,9 +154,17 @@ type displayCol struct {
 	Align      string
 	Num        bool
 	Readonly   bool
+	Edit       string
+	Options    []Option
 	GroupKey   string
 	IsSummary  bool
 	FrozenLeft int // sticky left offset when Frozen
+}
+
+// Editable reports whether this display column opens an inline editor on
+// click/Enter (a non-readonly, non-summary column with an editor kind).
+func (d displayCol) Editable() bool {
+	return !d.Readonly && !d.IsSummary && d.Edit != ""
 }
 
 // PortfolioGroups is the canonical column-group order (§9.3). Identity is
@@ -192,7 +261,8 @@ func (s *SheetModel) resolveDisplayColumns() []displayCol {
 		for _, c := range s.Columns {
 			out = append(out, displayCol{
 				Key: c.Key, Label: c.Label, Width: c.Width, Frozen: c.Frozen,
-				Align: c.Align, Num: c.Num, Readonly: c.Readonly, GroupKey: c.Group,
+				Align: c.Align, Num: c.Num, Readonly: c.Readonly,
+				Edit: c.Edit, Options: c.Options, GroupKey: c.Group,
 			})
 		}
 		return out
@@ -222,7 +292,8 @@ func (s *SheetModel) resolveDisplayColumns() []displayCol {
 			for _, c := range cols {
 				out = append(out, displayCol{
 					Key: c.Key, Label: c.Label, Width: c.Width, Frozen: c.Frozen,
-					Align: c.Align, Num: c.Num, Readonly: c.Readonly, GroupKey: g.Key,
+					Align: c.Align, Num: c.Num, Readonly: c.Readonly,
+					Edit: c.Edit, Options: c.Options, GroupKey: g.Key,
 				})
 			}
 		}
@@ -230,7 +301,8 @@ func (s *SheetModel) resolveDisplayColumns() []displayCol {
 	for _, c := range byGroup["_default"] {
 		out = append(out, displayCol{
 			Key: c.Key, Label: c.Label, Width: c.Width, Frozen: c.Frozen,
-			Align: c.Align, Num: c.Num, Readonly: c.Readonly, GroupKey: "_default",
+			Align: c.Align, Num: c.Num, Readonly: c.Readonly,
+			Edit: c.Edit, Options: c.Options, GroupKey: "_default",
 		})
 	}
 	return out

@@ -7,7 +7,6 @@ package handlers
 import (
 	"fmt"
 	"html/template"
-	"sort"
 	"strings"
 	"time"
 
@@ -27,79 +26,6 @@ func buildEventsBody(events []mcp.Event) template.HTML {
 			template.HTMLEscapeString(e.WorkItemID),
 			template.HTMLEscapeString(e.ActorID),
 			template.HTMLEscapeString(e.Timestamp))
-	}
-	b.WriteString(`</div>`)
-	return template.HTML(b.String())
-}
-
-// buildTaxonomyBody renders the Org / Product / Goals taxonomy trees from meta.
-func buildTaxonomyBody(meta mcp.Meta) template.HTML {
-	var b strings.Builder
-	if len(meta.Taxonomies) == 0 {
-		return template.HTML(`<div class="empty-line">No taxonomies in meta yet. Run <code>pilot init</code> to apply the RE bundle, then add nodes.</div>`)
-	}
-	for _, tx := range meta.Taxonomies {
-		fmt.Fprintf(&b, `<div class="rx-panel" style="margin-bottom:14px"><div class="rx-panel__head"><span class="rx-panel__title">%s</span><span class="rx-panel__meta">%s · %d nodes</span></div><div class="rx-panel__body">`,
-			template.HTMLEscapeString(tx.Name), template.HTMLEscapeString(strings.Join(tx.Levels, " → ")), len(tx.Nodes))
-		if len(tx.Nodes) == 0 {
-			b.WriteString(`<div class="empty-line">empty skeleton — consumer fills nodes</div>`)
-		}
-		for _, n := range tx.Nodes {
-			depth := strings.Count(n.Slug, "/")
-			fmt.Fprintf(&b, `<div class="tx-node"><span class="indent" style="width:%dpx"></span><span style="display:flex;flex-direction:column;flex:1;min-width:0"><span class="name">%s</span><span class="slug">%s</span></span></div>`,
-				8+depth*18, template.HTMLEscapeString(n.Name), template.HTMLEscapeString(n.Slug))
-		}
-		b.WriteString(`</div></div>`)
-	}
-	return template.HTML(b.String())
-}
-
-// buildAttentionBody computes the "For you" buckets client-side from
-// milestones (§9.5). v1 surfaces the substrate-derivable buckets: pending
-// ACKs, rejected ACKs, and diagnostics on your work.
-func buildAttentionBody(items []mcp.WorkItem, me string) template.HTML {
-	type row struct{ chip, variant, id, title, ctx string }
-	var ackPending, rejected, diagnostics []row
-	for _, m := range items {
-		if a, ok := latestAck(m); ok {
-			if a.Specifier == "pending" || a.Builder == "pending" {
-				ackPending = append(ackPending, row{"ACK pending", "y", rowID(m), m.Title,
-					"alignment " + mcp.AckRollup(a.Specifier, a.Builder)})
-			}
-			if a.Specifier == "rejected" || a.Builder == "rejected" {
-				rejected = append(rejected, row{"rejected", "r", rowID(m), m.Title, "an ACK side rejected the commitment"})
-			}
-		}
-		if len(m.Diagnostics) > 0 {
-			msgs := make([]string, 0, len(m.Diagnostics))
-			for _, d := range m.Diagnostics {
-				msgs = append(msgs, d.Message)
-			}
-			diagnostics = append(diagnostics, row{fmt.Sprintf("%d flag", len(m.Diagnostics)), "y", rowID(m), m.Title, strings.Join(msgs, " · ")})
-		}
-	}
-
-	var b strings.Builder
-	section := func(title string, rows []row) {
-		if len(rows) == 0 {
-			return
-		}
-		fmt.Fprintf(&b, `<div class="att-section"><div class="att-section__head"><span class="att-sev att-sev--warn"></span><h3 class="att-section__title">%s</h3><span class="att-section__count">%d</span></div><div class="att-rows">`,
-			template.HTMLEscapeString(title), len(rows))
-		for _, r := range rows {
-			fmt.Fprintf(&b, `<a class="att-row" href="/portfolio?open=%s"><span class="att-sev att-sev--%s"></span><span class="att-row__chip">%s</span><span class="att-row__id dx-id">%s</span><span class="att-row__body"><span class="att-row__title">%s</span><span class="att-row__ctx">%s</span></span></a>`,
-				template.HTMLEscapeString(r.id), template.HTMLEscapeString(r.variant), pill(r.variant, r.chip),
-				template.HTMLEscapeString(r.id), template.HTMLEscapeString(r.title), template.HTMLEscapeString(r.ctx))
-		}
-		b.WriteString(`</div></div>`)
-	}
-	total := len(ackPending) + len(rejected) + len(diagnostics)
-	fmt.Fprintf(&b, `<div class="att"><div class="att-summary"><div class="att-summary__line"><span class="att-summary__count">%d</span><span class="att-summary__lab">things on you.</span></div><div class="att-summary__quip">Specific is kind. The substrate catches every change.</div></div>`, total)
-	section("ACKs needing attention", ackPending)
-	section("Rejected ACKs in your view", rejected)
-	section("Diagnostics on your work", diagnostics)
-	if total == 0 {
-		b.WriteString(`<div class="empty-line">Nothing on you today. Watch for silence — that's usually data.</div>`)
 	}
 	b.WriteString(`</div>`)
 	return template.HTML(b.String())
@@ -132,31 +58,6 @@ func buildIndicatorRow(ind projections.Indicators) template.HTML {
 	return template.HTML(b.String())
 }
 
-// buildLeadershipBody renders the in-flight milestone table (pattern blocks
-// land alongside the indicator projections).
-func buildLeadershipBody(items []mcp.WorkItem) template.HTML {
-	inflight := make([]mcp.WorkItem, 0)
-	for _, m := range items {
-		if m.Status == "in_flight" {
-			inflight = append(inflight, m)
-		}
-	}
-	sort.Slice(inflight, func(i, j int) bool { return rowID(inflight[i]) < rowID(inflight[j]) })
-	var b strings.Builder
-	fmt.Fprintf(&b, `<div class="rx-panel"><div class="rx-panel__head"><span class="rx-panel__title">In flight</span><span class="rx-panel__meta">%d milestones</span></div><table class="rx-table"><thead><tr><th>ID</th><th>Title</th><th>Alignment</th><th>Pilot</th><th>Status</th></tr></thead><tbody>`, len(inflight))
-	for _, m := range inflight {
-		rollup := "both_pending"
-		if a, ok := latestAck(m); ok {
-			rollup = mcp.AckRollup(a.Specifier, a.Builder)
-		}
-		fmt.Fprintf(&b, `<tr><td class="id">%s</td><td style="font-weight:500">%s</td><td>%s</td><td>%s</td><td>%s</td></tr>`,
-			template.HTMLEscapeString(rowID(m)), template.HTMLEscapeString(m.Title),
-			rollupPill(rollup), actorCell(roleActor(m, "pilot")), statusPill(m.Status))
-	}
-	b.WriteString(`</tbody></table></div>`)
-	return template.HTML(b.String())
-}
-
 // buildRoadmapItems filters milestones to the public projection: committed or
 // later. (customer_visible is methodology metadata not yet on the substrate
 // WorkItem, so v1 filters on status only — documented follow-up.)
@@ -186,4 +87,94 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return s[:n] + "…"
+}
+
+// nowRef is the reference "now" for elapsed/until computations. Centralised so
+// the Attention/Leadership signal logic shares a single clock.
+func nowRef() time.Time { return time.Now() }
+
+// plur returns "" for n==1 else "s" (Track-D pluralisation helper).
+func plur(n int) string {
+	if n == 1 {
+		return ""
+	}
+	return "s"
+}
+
+// nodeDepth is the tree depth of a taxonomy node, derived from its slug
+// (parent/child paths are slash-separated).
+func nodeDepth(slug string) int { return strings.Count(slug, "/") }
+
+// rygLabel maps an RYG token to a human label (g→green, …); empty stays empty.
+func rygLabel(v string) string {
+	switch v {
+	case "g":
+		return "green"
+	case "y":
+		return "yellow"
+	case "r":
+		return "red"
+	default:
+		return ""
+	}
+}
+
+// rygHealthPill renders the RYG health pill. Track-D-local (uniquely named to
+// avoid colliding with the sheet's own RYG cell renderer).
+func rygHealthPill(v string) template.HTML {
+	switch v {
+	case "g":
+		return pill("g", "Green")
+	case "y":
+		return pill("y", "Yellow")
+	case "r":
+		return pill("r", "Red")
+	default:
+		return template.HTML(`<span class="placeholder">—</span>`)
+	}
+}
+
+// resultPill renders a goals-node result pill (mirrors the prototype
+// RESULT_LABEL/RESULT_KIND).
+func resultPill(result string) template.HTML {
+	switch result {
+	case "achieved":
+		return pill("g", "Achieved")
+	case "partial":
+		return pill("y", "Partial")
+	case "missed":
+		return pill("r", "Missed")
+	case "in_progress":
+		return pill("blue", "In progress")
+	case "aborted":
+		return pill("neutral", "Aborted")
+	default:
+		return template.HTML(`<span class="placeholder">—</span>`)
+	}
+}
+
+// formatTarget renders a delivery target with its precision, mirroring the
+// prototype formatTarget: quarters pass through, months/dates get month-name
+// formatting, everything else passes through verbatim.
+func formatTarget(value, precision string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "—"
+	}
+	months := []string{"Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sept", "Oct", "Nov", "Dec"}
+	switch precision {
+	case "M":
+		if len(value) >= 7 {
+			if t, err := time.Parse("2006-01", value[:7]); err == nil {
+				return fmt.Sprintf("%s %d", months[int(t.Month())-1], t.Year())
+			}
+		}
+	case "D":
+		if len(value) >= 10 {
+			if t, err := time.Parse("2006-01-02", value[:10]); err == nil {
+				return fmt.Sprintf("%s %d, %d", months[int(t.Month())-1], t.Day(), t.Year())
+			}
+		}
+	}
+	return value
 }

@@ -22,16 +22,17 @@
   {{if .Tabs}}
   <div class="rx-slideover__tabs">
     {{range .Tabs}}
-    <div class="rx-slideover__tab{{if .Active}} is-active{{end}}" data-panel-tab="{{.Key}}">{{.Label}}</div>
+    <div class="rx-slideover__tab{{if .Active}} is-active{{end}}" data-panel-tab="{{.Key}}" data-panel-id="{{$.ID}}">{{.Label}}</div>
     {{end}}
   </div>
   {{end}}
   <div class="rx-slideover__body" data-panel-body>
     {{if .Body}}{{.Body}}
-    {{else}}<div class="empty-line">TODO(phase 5): {{.ActiveTab}} tab content for this record.</div>{{end}}
+    {{else}}<div class="empty-line">No content for the {{.ActiveTab}} tab.</div>{{end}}
   </div>
   <div style="border-top:1px solid var(--hairline);padding:12px 20px;background:var(--surface)">
     <div style="display:flex;gap:8px;align-items:center">
+      {{if .Footer}}{{.Footer}}{{end}}
       <div style="margin-left:auto;font-family:var(--font-mono);font-size:10px;color:var(--ink-4)">signed · {{if .Sig}}{{.Sig}}{{else}}a1b2c3d4{{end}}</div>
     </div>
   </div>

@@ -11,13 +11,22 @@
     * The multi-select gutter is sticky-left with a tinted opaque background
       at every horizontal scroll position (.sht tbody td.sht-gutter rule).
 
-  Data is a *web.SheetModel; handlers must call ComputeLayout first. The JS
-  island (sheet.js) hydrates keyboard nav / selection / panel-open on top of
-  this server-rendered, already-correct table.
+  Track B adds the interactive chrome on top of that static table: the
+  Portfolio toolbar (preset / group-by Pivots + filter chips), the bulk-action
+  bar (shown by sheet.js on selection), group-header rows, and hx-* attributes
+  on editable cells so a click/Enter opens an in-cell editor via HTMX.
+
+  Data is a *web.SheetModel; handlers must call ComputeLayout first.
 */ -}}
 {{- define "sheet" -}}
 {{- $sel := .Selectable -}}
-<div class="sht-wrap" tabindex="0" data-sheet data-nav-col="{{.NavColumnIdx}}">
+{{- /* The whole region is the HTMX swap target for toolbar/group-by/filter
+       re-renders (id="sht-region"); cell edits swap just their own cell. */ -}}
+<div id="sht-region">
+{{- if .Toolbar}}{{template "sheet-toolbar" .Toolbar}}{{end -}}
+{{- if .BulkURL}}{{template "sheet-bulkbar" .}}{{end -}}
+<div class="sht-wrap" tabindex="0" data-sheet data-nav-col="{{.NavColumnIdx}}"
+     {{if .AddKind}}data-add-kind="{{.AddKind}}"{{end}}{{if .BulkURL}} data-bulk-url="{{.BulkURL}}"{{end}}>
   <table class="sht" style="width:{{.TotalWidth}}px">
     <colgroup>
       {{if $sel}}<col style="width:32px">{{end}}
@@ -58,6 +67,43 @@
       {{$dcols := .DisplayColumns}}
       {{$navIdx := .NavColumnIdx}}
       {{$active := .ActiveID}}
+      {{$colspan := len .DisplayColumns}}{{if $sel}}{{$colspan = add $colspan 1}}{{end}}
+      {{if .Groups2}}
+      {{/* Row grouping (Track B group-by): banded header rows + counts. */}}
+      {{range $g := .Groups2}}
+      <tr class="sht-group">
+        <td colspan="{{$colspan}}">
+          <span class="sht-group__lab">{{$g.Key}}</span>
+          <span class="sht-group__count">{{$g.Count}}</span>
+        </td>
+      </tr>
+      {{range $ri, $row := $g.Rows}}
+      <tr data-row-id="{{$row.ID}}"{{if eq $row.ID $active}} class="is-active"{{end}}>
+        {{if $sel}}<td class="sht-gutter"><input type="checkbox" data-select-row="{{$row.ID}}"></td>{{end}}
+        {{range $ci, $col := $dcols}}
+        <td class="{{if $col.Frozen}}is-frozen {{end}}{{if $col.Num}}is-num{{end}}{{if $col.IsSummary}} is-summary{{end}}"
+            {{if $col.Frozen}}style="left:{{$col.FrozenLeft}}px"{{end}}>
+          {{- $cell := index $row.Cells $col.Key -}}
+          {{- if $col.Editable -}}
+          <div class="sht-cell{{if $col.Align}} is-right{{end}}{{if $col.Num}} is-num{{end}}"
+               data-col-idx="{{$ci}}"{{if eq $ci $navIdx}} data-nav-cell{{end}}
+               data-editable data-col="{{$col.Key}}"
+               hx-get="/partials/sheet/edit?id={{$row.ID}}&col={{$col.Key}}"
+               hx-target="this" hx-swap="innerHTML" hx-trigger="edit">
+            {{- if $cell.HTML}}{{$cell.HTML}}{{else if $cell.Raw}}{{$cell.Raw}}{{else}}<span class="placeholder">—</span>{{end -}}
+          </div>
+          {{- else -}}
+          <div class="sht-cell{{if $col.Align}} is-right{{end}}{{if $col.Num}} is-num{{end}}{{if $col.Readonly}} is-readonly{{end}}"
+               data-col-idx="{{$ci}}"{{if eq $ci $navIdx}} data-nav-cell{{end}}>
+            {{- if $cell.HTML}}{{$cell.HTML}}{{else if $cell.Raw}}{{$cell.Raw}}{{else}}<span class="placeholder">—</span>{{end -}}
+          </div>
+          {{- end -}}
+        </td>
+        {{end}}
+      </tr>
+      {{end}}
+      {{end}}
+      {{else}}
       {{range $ri, $row := .Rows}}
       <tr data-row-id="{{$row.ID}}"{{if eq $row.ID $active}} class="is-active"{{end}}>
         {{if $sel}}<td class="sht-gutter"><input type="checkbox" data-select-row="{{$row.ID}}"></td>{{end}}
@@ -65,13 +111,24 @@
         <td class="{{if $col.Frozen}}is-frozen {{end}}{{if $col.Num}}is-num{{end}}{{if $col.IsSummary}} is-summary{{end}}"
             {{if $col.Frozen}}style="left:{{$col.FrozenLeft}}px"{{end}}>
           {{- $cell := index $row.Cells $col.Key -}}
+          {{- if $col.Editable -}}
+          <div class="sht-cell{{if $col.Align}} is-right{{end}}{{if $col.Num}} is-num{{end}}"
+               data-col-idx="{{$ci}}"{{if eq $ci $navIdx}} data-nav-cell{{end}}
+               data-editable data-col="{{$col.Key}}"
+               hx-get="/partials/sheet/edit?id={{$row.ID}}&col={{$col.Key}}"
+               hx-target="this" hx-swap="innerHTML" hx-trigger="edit">
+            {{- if $cell.HTML}}{{$cell.HTML}}{{else if $cell.Raw}}{{$cell.Raw}}{{else}}<span class="placeholder">—</span>{{end -}}
+          </div>
+          {{- else -}}
           <div class="sht-cell{{if $col.Align}} is-right{{end}}{{if $col.Num}} is-num{{end}}{{if $col.Readonly}} is-readonly{{end}}"
                data-col-idx="{{$ci}}"{{if eq $ci $navIdx}} data-nav-cell{{end}}>
             {{- if $cell.HTML}}{{$cell.HTML}}{{else if $cell.Raw}}{{$cell.Raw}}{{else}}<span class="placeholder">—</span>{{end -}}
           </div>
+          {{- end -}}
         </td>
         {{end}}
       </tr>
+      {{end}}
       {{end}}
       {{if .AddLabel}}
       <tr class="sht-add" data-add-row>
@@ -86,5 +143,88 @@
       {{end}}
     </tbody>
   </table>
+</div>
+</div>
+{{- end -}}
+
+{{- /* sheet-toolbar — preset / pivot / group-by Pivots + filter chips + count
+       + New action (port of App.jsx PortfolioToolbar + FilterChips). All
+       controls navigate the BaseURL with query params via hx-get so the
+       server re-renders the grid (full reload-free swap of #sht-region). */ -}}
+{{- define "sheet-toolbar" -}}
+<div class="sht-toolbar" data-toolbar data-base="{{.BaseURL}}">
+  <span class="label-tag">View</span>
+  <div class="rx-pivot">
+    {{range .Presets}}
+    <button type="button" class="{{if eq .Value $.Preset}}is-active{{end}}"
+      data-preset="{{.Value}}">{{.Label}}</button>
+    {{end}}
+  </div>
+  <span class="sep">·</span>
+  <span class="label-tag">Group by</span>
+  <div class="rx-pivot">
+    {{range .GroupByOpts}}
+    <button type="button" class="{{if eq .Value $.GroupBy}}is-active{{end}}"
+      data-groupby="{{.Value}}">{{.Label}}</button>
+    {{end}}
+  </div>
+  <span class="sep">·</span>
+  <span class="flt-row" data-filter-row>
+    {{range $i, $f := .Filters}}
+    <span class="flt-chip" data-chip-idx="{{$i}}">
+      <span class="flt-chip__lab">{{$f.Label}}</span>
+      <span class="flt-chip__sep">{{if $f.Op}}{{$f.Op}}{{else}}is{{end}}</span>
+      <span class="flt-chip__val">{{$f.ValueLab}}</span>
+      <span class="flt-chip__x" data-chip-remove="{{$f.Field}}">×</span>
+    </span>
+    {{end}}
+    <span class="flt-add-wrap" data-filter-add>
+      <button type="button" class="flt-add">
+        <svg viewBox="0 0 24 24" width="11" height="11" style="stroke:currentColor;stroke-width:1.5;fill:none;stroke-linecap:round;stroke-linejoin:round"><path d="M12 5v14M5 12h14"/></svg>
+        Add filter
+      </button>
+      <span class="flt-pop" data-filter-pop hidden>
+        <span class="flt-pop__head">Filter by…</span>
+        {{range .FilterFields}}
+        <span class="flt-pop__opt" data-field="{{.Field}}" data-kind="{{.Kind}}">{{.Label}}</span>
+        {{end}}
+      </span>
+    </span>
+    {{if .Filters}}<span class="flt-clear" data-filter-clear>clear all</span>{{end}}
+  </span>
+  <span class="sht-count"><em>{{.Total}}</em> total</span>
+  {{if .AddLabel}}
+  <div class="actions">
+    <button type="button" class="rx-btn rx-btn--accent" data-add-row>
+      <svg viewBox="0 0 24 24" width="11" height="11" style="stroke:currentColor;stroke-width:1.75;fill:none;stroke-linecap:round;stroke-linejoin:round"><path d="M12 5v14M5 12h14"/></svg>
+      {{.AddLabel}}
+    </button>
+  </div>
+  {{end}}
+</div>
+{{- /* Filter value lists for each field, used by the +Add popover / chip edit
+       (rendered hidden; sheet.js shows the matching one). */ -}}
+<template data-filter-values>
+  {{range .FilterFields}}
+  <span data-field-values="{{.Field}}" data-kind="{{.Kind}}">
+    {{range .Options}}<span class="flt-pop__opt" data-value="{{.Value}}">{{.Label}}</span>{{end}}
+  </span>
+  {{end}}
+</template>
+{{- end -}}
+
+{{- /* sheet-bulkbar — the selection action bar. Hidden until sheet.js reveals
+       it on row selection; its buttons post the selected IDs to BulkURL. */ -}}
+{{- define "sheet-bulkbar" -}}
+<div class="rx-bulkbar" data-bulkbar hidden>
+  <span class="count" data-bulk-count>0</span>
+  <span>selected</span>
+  <div class="actions">
+    <button type="button" class="rx-btn rx-btn--ghost rx-btn--sm" data-bulk-action="reassign">Reassign</button>
+    <button type="button" class="rx-btn rx-btn--ghost rx-btn--sm" data-bulk-action="quarter">Set quarter</button>
+    <button type="button" class="rx-btn rx-btn--ghost rx-btn--sm" data-bulk-action="classify">Classify</button>
+    <button type="button" class="rx-btn rx-btn--ghost rx-btn--sm" data-bulk-action="ack">Accept ACK</button>
+    <button type="button" class="rx-btn rx-btn--ghost rx-btn--sm" data-bulk-clear>Clear</button>
+  </div>
 </div>
 {{- end -}}

@@ -119,6 +119,24 @@ func actorCell(actor string) template.HTML {
 		`<span class="dx-owner__name">` + template.HTMLEscapeString(actor) + `</span></span>`)
 }
 
+// editableActorCell wraps actorCell in a .sht-cell whose click opens the Track E
+// ActorPicker for the given work item + role. Tracks B/C use this to make an
+// actor/role cell editable: the click hx-gets /partials/actor-picker (which
+// returns the popover), and a selection POSTs back the avatar cell. id is the
+// work-item id, role the role slug to bind (specifier/builder/pilot/owner), and
+// bound the currently bound actor (passed through so the picker can offer
+// Unassign and unbind-before-rebind). Keeps actorCell/avatarHTML untouched.
+func editableActorCell(id, role, bound string) template.HTML {
+	esc := template.HTMLEscapeString
+	get := "/partials/actor-picker?id=" + esc(id) + "&role=" + esc(role)
+	if bound != "" {
+		get += "&bound=" + esc(bound)
+	}
+	return template.HTML(`<div class="sht-cell" style="cursor:pointer"` +
+		` hx-get="` + get + `" hx-target="this" hx-swap="innerHTML">` +
+		string(actorCell(bound)) + `</div>`)
+}
+
 // avatarHTML renders just the round initials avatar for an actor id, with a
 // deterministic colour. Use inline (role stacks, event log, compact cells).
 func avatarHTML(actor string) template.HTML {

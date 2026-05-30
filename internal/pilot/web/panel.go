@@ -17,6 +17,10 @@ type PanelTab struct {
 // MilestoneTabs is the canonical tab order for a milestone record (§9.4).
 var MilestoneTabs = []string{"ACK", "Status", "Stages", "Deps", "Updates", "Receipts"}
 
+// DetailTabs is the single-tab bar RFC / Decision / Outcome panels use
+// (the prototype renders one "Detail" body for these kinds).
+var DetailTabs = []string{"Detail"}
+
 // PanelModel is everything panel.html needs. Bodies are placeholders in the
 // foundation; the per-tab content lands as the views fan out.
 type PanelModel struct {
@@ -24,23 +28,35 @@ type PanelModel struct {
 	Title     string        // record title
 	Tabs      []PanelTab    // tab bar
 	ActiveTab string        // active tab key
-	Body      template.HTML // pre-rendered tab body (placeholder for now)
+	Body      template.HTML // pre-rendered tab body
+	Footer    template.HTML // pre-rendered footer action row (Accept-both, Resolve, …)
 	Sig       string        // "signed · <sig>" footer
+}
+
+// newPanel builds a PanelModel over the given tab order, marking initialTab
+// active (defaulting to the first tab).
+func newPanel(id, title, initialTab string, tabKeys []string) *PanelModel {
+	if initialTab == "" && len(tabKeys) > 0 {
+		initialTab = tabKeys[0]
+	}
+	tabs := make([]PanelTab, 0, len(tabKeys))
+	for _, t := range tabKeys {
+		tabs = append(tabs, PanelTab{Key: t, Label: t, Active: t == initialTab})
+	}
+	return &PanelModel{ID: id, Title: title, Tabs: tabs, ActiveTab: initialTab}
 }
 
 // NewMilestonePanel builds a PanelModel with the milestone tab bar, opening
 // on initialTab (defaults to "ACK", the prototype's milestone default).
-//
-// TODO(phase 5): per-tab body rendering (ACK stand-behind cards, Status RYG
-// control + composer, Stages, Deps, Updates feed, Receipts) as the views
-// fan out. Today the body is a placeholder.
 func NewMilestonePanel(id, title, initialTab string) *PanelModel {
 	if initialTab == "" {
 		initialTab = "ACK"
 	}
-	tabs := make([]PanelTab, 0, len(MilestoneTabs))
-	for _, t := range MilestoneTabs {
-		tabs = append(tabs, PanelTab{Key: t, Label: t, Active: t == initialTab})
-	}
-	return &PanelModel{ID: id, Title: title, Tabs: tabs, ActiveTab: initialTab}
+	return newPanel(id, title, initialTab, MilestoneTabs)
+}
+
+// NewDetailPanel builds a single-"Detail"-tab PanelModel for the RFC /
+// Decision / Outcome kinds, whose body the kind-specific builder renders.
+func NewDetailPanel(id, title string) *PanelModel {
+	return newPanel(id, title, "Detail", DetailTabs)
 }

@@ -29,11 +29,16 @@ import (
 type Server struct {
 	Client     mcp.Client
 	Indicators *projections.Cache
+	Actors     *web.ActorDirectory
 }
 
 // New returns a Server backed by the given MCP client.
 func New(client mcp.Client) *Server {
-	return &Server{Client: client, Indicators: projections.NewCache()}
+	return &Server{
+		Client:     client,
+		Indicators: projections.NewCache(),
+		Actors:     web.NewActorDirectory(client),
+	}
 }
 
 // Register wires the twelve UI routes, the default-landing redirect, and the
@@ -107,9 +112,13 @@ func errBody(err error) template.HTML {
 
 // ForYou serves GET /for-you — the default landing Attention view (§9.5).
 func (s *Server) ForYou(w http.ResponseWriter, r *http.Request) {
-	items := s.milestones(r.Context())
+	ctx := r.Context()
+	items := s.milestones(ctx)
+	decisions, _ := s.Client.WorkList(ctx, mcp.Filters{Kind: "decision_block"})
+	outcomes, _ := s.Client.WorkList(ctx, mcp.Filters{Kind: "outcome_assessment"})
+	rfcs, _ := s.Client.WorkList(ctx, mcp.Filters{Kind: "rfc"})
 	renderLayout(w, "attention", func(p *web.Page) {
-		p.Body = buildAttentionBody(items, "")
+		p.Body = buildAttentionBody(items, decisions, outcomes, rfcs)
 		p.Counters = fmt.Sprintf("%d milestones", len(items))
 	})
 }
@@ -118,13 +127,17 @@ func (s *Server) ForYou(w http.ResponseWriter, r *http.Request) {
 // indicators (§9.2). The indicator cache is rebuilt on each load; a later
 // pass invalidates it on write instead (§10.3).
 func (s *Server) Leadership(w http.ResponseWriter, r *http.Request) {
-	items := s.milestones(r.Context())
+	ctx := r.Context()
+	items := s.milestones(ctx)
+	decisions, _ := s.Client.WorkList(ctx, mcp.Filters{Kind: "decision_block"})
+	outcomes, _ := s.Client.WorkList(ctx, mcp.Filters{Kind: "outcome_assessment"})
+	meta, _ := s.Client.MetaGet(ctx)
 	var ind projections.Indicators
-	if err := s.Indicators.Rebuild(r.Context(), s.Client); err == nil {
+	if err := s.Indicators.Rebuild(ctx, s.Client); err == nil {
 		ind, _ = s.Indicators.Get()
 	}
 	renderLayout(w, "leadership", func(p *web.Page) {
-		p.Body = buildIndicatorRow(ind) + buildLeadershipBody(items)
+		p.Body = buildIndicatorRow(ind) + buildLeadershipBody(items, decisions, outcomes, meta)
 	})
 }
 
@@ -132,16 +145,18 @@ func (s *Server) Leadership(w http.ResponseWriter, r *http.Request) {
 // (§9.3). ?open=<id> opens the slide-over; ?group / ?preset / ?tab adjust it.
 func (s *Server) Portfolio(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	items := s.milestones(r.Context())
+	ctx := r.Context()
+	items := s.milestones(ctx)
 	renderLayout(w, "portfolio", func(p *web.Page) {
-		p.Sheet = buildPortfolioSheet(items, q.Get("preset"), q.Get("group"), q.Get("open"))
+		p.Sheet = buildPortfolioSheet(items, PortfolioParamsFromQuery(q, items))
 		p.Counters = fmt.Sprintf("%d milestones", len(items))
 		if open := q.Get("open"); open != "" {
 			panel := web.NewMilestonePanel(open, open, q.Get("tab"))
 			// Fetch the opened record so the panel hosts live, editable controls.
-			if item, err := s.Client.WorkGet(r.Context(), open); err == nil {
+			if item, err := s.Client.WorkGet(ctx, open); err == nil {
 				panel.Title = item.Title
-				panel.Body = buildMilestonePanelBody(item, panel.ActiveTab)
+				panel.Body = s.buildMilestoneTab(ctx, item, panel.ActiveTab)
+				panel.Footer = milestoneFooter(item)
 			}
 			p.Panel = panel
 		}
@@ -159,7 +174,8 @@ func (s *Server) Ack(w http.ResponseWriter, r *http.Request) {
 
 // Rfcs serves GET /rfcs — the RFC review queue.
 func (s *Server) Rfcs(w http.ResponseWriter, r *http.Request) {
-	items, err := s.Client.WorkList(r.Context(), mcp.Filters{Kind: "rfc"})
+	ctx := r.Context()
+	items, err := s.Client.WorkList(ctx, mcp.Filters{Kind: "rfc"})
 	renderLayout(w, "rfcs", func(p *web.Page) {
 		if err != nil {
 			p.Body = errBody(err)
@@ -167,45 +183,71 @@ func (s *Server) Rfcs(w http.ResponseWriter, r *http.Request) {
 		}
 		p.Sheet = buildRfcSheet(items)
 		p.Counters = fmt.Sprintf("%d RFCs", len(items))
+		if open := r.URL.Query().Get("open"); open != "" {
+			if item, err := s.Client.WorkGet(ctx, open); err == nil {
+				panel := web.NewDetailPanel(open, item.Title)
+				panel.Body = s.rfcDetailBody(ctx, item)
+				p.Panel = panel
+			}
+		}
 	})
 }
 
 // Log serves GET /log — Pilot's Log (observations across milestones).
 func (s *Server) Log(w http.ResponseWriter, r *http.Request) {
-	events, err := s.Client.EventsList(r.Context(), "work.observation_recorded", "", 100)
+	ctx := r.Context()
+	events, err := s.Client.EventsList(ctx, "work.observation_recorded", "", 100)
+	milestones := s.milestones(ctx)
 	renderLayout(w, "log", func(p *web.Page) {
 		if err != nil {
 			p.Body = errBody(err)
 			return
 		}
-		p.Body = buildEventsBody(events)
+		p.Body = buildLogBody(events, milestones)
 		p.Counters = fmt.Sprintf("%d entries", len(events))
 	})
 }
 
 // Decisions serves GET /decisions — DecisionBlocks.
 func (s *Server) Decisions(w http.ResponseWriter, r *http.Request) {
-	items, err := s.Client.WorkList(r.Context(), mcp.Filters{Kind: "decision_block"})
+	ctx := r.Context()
+	items, err := s.Client.WorkList(ctx, mcp.Filters{Kind: "decision_block"})
 	renderLayout(w, "decisions", func(p *web.Page) {
 		if err != nil {
 			p.Body = errBody(err)
 			return
 		}
-		p.Sheet = buildKindSheet(items, "Open DecisionBlock…")
+		p.Sheet = buildDecisionsSheet(items)
 		p.Counters = fmt.Sprintf("%d decisions", len(items))
+		if open := r.URL.Query().Get("open"); open != "" {
+			if item, err := s.Client.WorkGet(ctx, open); err == nil {
+				panel := web.NewDetailPanel(open, item.Title)
+				panel.Body = decisionDetailBody(item)
+				panel.Footer = decisionFooter(item)
+				p.Panel = panel
+			}
+		}
 	})
 }
 
 // Outcomes serves GET /outcomes — OutcomeAssessments.
 func (s *Server) Outcomes(w http.ResponseWriter, r *http.Request) {
-	items, err := s.Client.WorkList(r.Context(), mcp.Filters{Kind: "outcome_assessment"})
+	ctx := r.Context()
+	items, err := s.Client.WorkList(ctx, mcp.Filters{Kind: "outcome_assessment"})
 	renderLayout(w, "outcomes", func(p *web.Page) {
 		if err != nil {
 			p.Body = errBody(err)
 			return
 		}
-		p.Sheet = buildKindSheet(items, "")
+		p.Sheet = buildOutcomesSheet(items)
 		p.Counters = fmt.Sprintf("%d assessments", len(items))
+		if open := r.URL.Query().Get("open"); open != "" {
+			if item, err := s.Client.WorkGet(ctx, open); err == nil {
+				panel := web.NewDetailPanel(open, item.Title)
+				panel.Body = outcomeDetailBody(item)
+				p.Panel = panel
+			}
+		}
 	})
 }
 
@@ -219,13 +261,15 @@ func (s *Server) Roles(w http.ResponseWriter, r *http.Request) {
 
 // Taxonomies serves GET /taxonomies — Org / Product / Goals trees from meta.
 func (s *Server) Taxonomies(w http.ResponseWriter, r *http.Request) {
-	meta, err := s.Client.MetaGet(r.Context())
+	ctx := r.Context()
+	meta, err := s.Client.MetaGet(ctx)
+	milestones := s.milestones(ctx)
 	renderLayout(w, "taxonomies", func(p *web.Page) {
 		if err != nil {
 			p.Body = errBody(err)
 			return
 		}
-		p.Body = buildTaxonomyBody(meta)
+		p.Body = buildTaxonomyBody(meta, r.URL.Query().Get("tax"), milestones)
 	})
 }
 

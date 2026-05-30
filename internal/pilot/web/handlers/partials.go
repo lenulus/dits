@@ -22,10 +22,12 @@ import (
 // coordinator adds each track's register<Track>Partials(mux) call here as the
 // track lands, keeping handlers the only shared integration file.
 func (s *Server) registerPartials(mux *http.ServeMux) {
-	// Track register functions are wired here at integration time, e.g.:
-	//   s.registerSheetEdit(mux)        // Track B
-	//   s.registerPanelPartials(mux)    // Track C
-	//   s.registerAttentionPartials(mux) // Track D
+	s.registerSheetEdit(mux)         // Track B — inline cell editors + commit/bulk/add swaps
+	s.registerPanelPartials(mux)     // Track C — panel tab bodies + ack-history
+	s.registerIdentityPartials(mux)  // Track E — actor picker + ⌘K search/create
+	s.registerAttentionPartials(mux) // Track D — in-place Attention actions
+	s.registerLogPartials(mux)       // Track D — Pilot's Log quick-entry
+	s.registerTaxonomyAdmin(mux)     // Track D — taxonomy node CRUD
 }
 
 // renderPartial writes an HTML fragment as the full response body (no layout).
